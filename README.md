@@ -20,6 +20,12 @@ All post-match processing (stats, exports, ledger, betting) lives in the stat bo
 
 This separation is deliberate to keep match orchestration lightweight and stat processing scalable.
 
+## Required AI Workflow Review
+
+Before beginning AI-assisted implementation, debugging, refactoring, migration, or production fix work in this repository, review [docs/AI_WORKFLOW_GUARDRAILS.md](./docs/AI_WORKFLOW_GUARDRAILS.md).
+
+Default behavior: smallest safe change, lowest blast radius, no unrelated file edits, no speculative rewrites, and explicit consideration of scale, queues, caching, indexes, retries, idempotency, rollback, and operational safety.
+
 ## Commands
 
 ### Gods
