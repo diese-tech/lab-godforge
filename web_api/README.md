@@ -137,6 +137,8 @@ POST /api/wallet/adjust
 POST /api/ledger/reset
 ```
 
+Legacy economy mutation endpoints stay behind `GODFORGE_ENABLE_LEGACY_ECONOMY=true`. Leave that unset in normal production so GodForge cannot create matches, accept bets, resolve payouts, adjust wallets, or reset ledgers.
+
 ## Admin Payloads
 
 ```json
@@ -213,6 +215,7 @@ POST /api/commands/custom/delete
 ## Notes
 
 - Draft rooms are in memory and disappear when the API process stops.
+- `POST /api/draft/start` accepts optional `forgelensMatchId` / `forgelens_match_id` and `gameNumber` / `game_number` values for ForgeLens-linked drafts.
 - The website falls back to demo data when this API is not running.
 - Ledger and wallet endpoints use the existing local JSON files in `data/`.
 - Production deployment and persistent state are intentionally deferred.

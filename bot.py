@@ -40,6 +40,9 @@ if not TOKEN:
     raise RuntimeError("DISCORD_TOKEN environment variable is not set.")
 ACTIVITY_BACKEND_URL = os.getenv("ACTIVITY_BACKEND_URL", "").rstrip("/")
 ACTIVITY_API_KEY = os.getenv("ACTIVITY_API_KEY", "")
+LEGACY_ECONOMY_ENABLED = os.getenv("GODFORGE_ENABLE_LEGACY_ECONOMY", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 
 # Channel IDs for the betting system.
 # Set these in .env (or leave 0 to disable that feature).
@@ -101,6 +104,26 @@ def _cleanup_draft(channel_id: int) -> None:
         task.cancel()
 
 
+def _draft_start_options(content: str) -> dict:
+    match = re.search(r"(?:^|\s)--match\s+(\S+)", content)
+    game = re.search(r"(?:^|\s)--game\s+(\d+)", content)
+    return {
+        "forgelens_match_id": match.group(1) if match else "",
+        "game_number": int(game.group(1)) if game else 1,
+    }
+
+
+def _draft_completion_marker(draft) -> str:
+    return "\n".join(
+        [
+            "Draft complete",
+            f"draft_id={draft.draft_id}",
+            f"forgelens_match_id={getattr(draft, 'forgelens_match_id', '')}",
+            f"game_number={draft.current_game.game_number}",
+        ]
+    )
+
+
 # ── Activity backend helpers ──────────────────────────────────────────────────
 
 def _activity_headers() -> dict:
@@ -151,10 +174,25 @@ async def _post_export(export: dict, channel) -> None:
     export.setdefault("guild_id", guild.id if guild else None)
     export.setdefault("channel_id", channel.id)
     export.setdefault("match_id", export.get("matchId") or export.get("draftId") or export.get("draft_id"))
+    export.setdefault("draft_id", export.get("draftId") or export.get("match_id"))
+    export.setdefault("forgelens_match_id", export.get("forgelensMatchId") or "")
+    export.setdefault("game_number", export.get("gameNumber") or 1)
+    export.setdefault("draft_sequence", export.get("draftSequence") or 1)
+    export.setdefault("status", "draft_complete")
     export.setdefault("producer", "GodForge")
-    draft_id = export.get("draftId", "unknown")
+    draft_id = export.get("draftId") or export.get("draft_id", "unknown")
     embed = formatter.format_draft_end_from_export(export)
     await channel.send(embed=embed)
+    await channel.send(
+        "\n".join(
+            [
+                "Draft complete",
+                f"draft_id={export.get('draft_id', draft_id)}",
+                f"forgelens_match_id={export.get('forgelens_match_id', '')}",
+                f"game_number={export.get('game_number', 1)}",
+            ]
+        )
+    )
 
     filename = f"draft_{draft_id}.json"
     json_bytes = json.dumps(export, indent=2).encode("utf-8")
@@ -402,17 +440,24 @@ async def _handle_draft_activity(intent: dict, message: discord.Message):
             return formatter.format_error("A draft is already active. Use `.draft end` first.")
 
         mentions = message.mentions
+        options = _draft_start_options(message.content)
         if len(mentions) < 2:
-            return formatter.format_error("Usage: `.draft start @blue_captain @red_captain`")
+            return formatter.format_error(
+                "Usage: `.draft start @blue_captain @red_captain [--match FL-123] [--game 2]`"
+            )
         blue_user, red_user = mentions[0], mentions[1]
         if blue_user.id == red_user.id:
             return formatter.format_error("Blue and red captains must be different users.")
+        if options["game_number"] < 1:
+            return formatter.format_error("`--game` must be 1 or greater.")
 
         result = await _activity_post("/api/draft/start", {
             "blueCaptainId": str(blue_user.id),
             "blueCaptainName": blue_user.display_name,
             "redCaptainId": str(red_user.id),
             "redCaptainName": red_user.display_name,
+            "forgelensMatchId": options["forgelens_match_id"],
+            "gameNumber": options["game_number"],
         })
         if not result or "error" in result:
             err = result.get("error") if result else "Activity backend unreachable."
@@ -505,6 +550,8 @@ async def _handle_draft_local(intent: dict, message: discord.Message):
             guild_id=guild.id if guild else 0,
             guild_name=guild.name if guild else "DM",
             channel_name=message.channel.name if hasattr(message.channel, "name") else "unknown",
+            forgelens_match_id=options["forgelens_match_id"],
+            game_number=options["game_number"],
         )
         if not draft:
             return formatter.format_error("Failed to start draft.")
@@ -699,7 +746,13 @@ async def _post_claim_embeds(draft, channel):
     game = draft.current_game
     for team in ("blue", "red"):
         embed = formatter.format_claim_embed(
-            team, game.picks[team], game.claims[team], draft.draft_id
+            team,
+            game.picks[team],
+            game.claims[team],
+            draft.draft_id,
+            getattr(draft, "forgelens_match_id", ""),
+            game.game_number,
+            getattr(draft, "draft_sequence", 1),
         )
         sent = await channel.send(embed=embed)
         draft.claim_message_ids[team] = sent.id
@@ -724,7 +777,13 @@ async def _update_claim_embed(draft, team, channel):
         msg = await channel.fetch_message(msg_id)
         game = draft.current_game
         embed = formatter.format_claim_embed(
-            team, game.picks[team], game.claims[team], draft.draft_id
+            team,
+            game.picks[team],
+            game.claims[team],
+            draft.draft_id,
+            getattr(draft, "forgelens_match_id", ""),
+            game.game_number,
+            getattr(draft, "draft_sequence", 1),
         )
         await msg.edit(embed=embed)
         if all(god in game.claims[team] for god in game.picks[team]):
@@ -799,6 +858,7 @@ async def _handle_claim_reaction(payload, info, message_id, channel_id, emoji):
             log.info(f"Draft {draft.draft_id}: {user_name} claimed {god} ({team})")
             await _update_claim_embed(draft, team, channel)
             if draft.current_game.is_fully_claimed():
+                await channel.send(_draft_completion_marker(draft))
                 log.info(f"Draft {draft.draft_id}: all claims complete for "
                          f"Game {draft.current_game.game_number}")
 

@@ -119,7 +119,16 @@ type Build = {
 ```ts
 type DraftState = {
   draftId: string;
+  matchId: string;
+  forgelensMatchId: string;
   gameNumber: number;
+  draftSequence: number;
+  draftStatus:
+    | "drafting"
+    | "picks_bans_complete"
+    | "claiming"
+    | "draft_complete"
+    | "draft_abandoned";
   phase: string;
   step: number;
   complete: boolean;
@@ -141,6 +150,8 @@ type DraftState = {
   unavailableGods: string[];
 };
 ```
+
+GodForge owns `draftId`. `matchId` is a legacy alias for older consumers. ForgeLens integrations should link via optional `forgelensMatchId` instead of assuming the two ids are the same.
 
 ## Admin Status
 

@@ -297,6 +297,29 @@ def _pad_list(items: list[str], target: int, placeholder: str = "—") -> list[s
     return items + [placeholder] * (target - len(items))
 
 
+def _forgelens_status_value(draft_status: str, draft_id: str, forgelens_match_id: str,
+                            game_number: int, draft_sequence: int) -> str:
+    return "\n".join([
+        f"draft_status={draft_status}",
+        f"draft_id={draft_id}",
+        f"forgelens_match_id={forgelens_match_id}",
+        f"game_number={game_number}",
+        f"draft_sequence={draft_sequence}",
+    ])
+
+
+def _add_forgelens_status_field(embed: discord.Embed, draft_status: str, draft_id: str,
+                                forgelens_match_id: str, game_number: int,
+                                draft_sequence: int) -> None:
+    embed.add_field(
+        name="ForgeLens Status",
+        value=_forgelens_status_value(
+            draft_status, draft_id, forgelens_match_id, game_number, draft_sequence
+        ),
+        inline=False,
+    )
+
+
 def format_draft_board(draft) -> discord.Embed:
     """Living embed showing current game state."""
     from utils.draft import get_phase_label
@@ -334,6 +357,14 @@ def format_draft_board(draft) -> discord.Embed:
         fearless = ", ".join(sorted(draft.fearless_pool))
         embed.add_field(name="🚫 Fearless Pool", value=fearless, inline=False)
 
+    _add_forgelens_status_field(
+        embed,
+        draft.current_status(),
+        draft.draft_id,
+        getattr(draft, "forgelens_match_id", ""),
+        game.game_number,
+        getattr(draft, "draft_sequence", 1),
+    )
     embed.add_field(name="⏳ Current Turn", value=status, inline=False)
     embed.set_footer(text=f"GodForge v1.6 • Draft {draft.draft_id}")
     return embed
@@ -395,7 +426,22 @@ def format_draft_show(draft) -> discord.Embed:
     else:
         fearless = "None yet"
     embed.add_field(name="🚫 Fearless Pool", value=fearless, inline=False)
-
+    _add_forgelens_status_field(
+        embed,
+        draft.current_status(),
+        draft.draft_id,
+        getattr(draft, "forgelens_match_id", ""),
+        draft.current_game.game_number,
+        getattr(draft, "draft_sequence", 1),
+    )
+    _add_forgelens_status_field(
+        embed,
+        export.get("status", getattr(draft, "current_status", lambda: "draft_complete")()),
+        export.get("draft_id", draft.draft_id),
+        export.get("forgelens_match_id", ""),
+        export.get("game_number", draft.current_game.game_number),
+        export.get("draft_sequence", getattr(draft, "draft_sequence", 1)),
+    )
     embed.set_footer(text=f"GodForge v1.6 • Draft {draft.draft_id}")
     return embed
 
@@ -466,7 +512,8 @@ def format_draft_next(draft) -> str:
 
 
 def format_claim_embed(team: str, picks: list[str], claims: dict,
-                       draft_id: str) -> discord.Embed:
+                       draft_id: str, forgelens_match_id: str = "",
+                       game_number: int = 1, draft_sequence: int = 1) -> discord.Embed:
     """
     Claim embed for one team. Players react 1️⃣-5️⃣ to claim their god.
     claims dict: god_name -> {"user_id": ..., "name": ..., ...} or missing if unclaimed.
@@ -491,6 +538,14 @@ def format_claim_embed(team: str, picks: list[str], claims: dict,
         title = f"{team_label} Team — Claim your god!"
 
     embed = discord.Embed(title=title, description=description, color=color)
+    _add_forgelens_status_field(
+        embed,
+        "draft_complete" if all_claimed else ("claiming" if claims else "picks_bans_complete"),
+        draft_id,
+        forgelens_match_id,
+        game_number,
+        draft_sequence,
+    )
     embed.set_footer(text=f"GodForge v1.6 • Draft {draft_id} • React to claim")
     return embed
 
@@ -542,6 +597,14 @@ def format_board_from_snapshot(snapshot: dict) -> discord.Embed:
     if fearless_pool:
         embed.add_field(name="🚫 Fearless Pool", value=", ".join(fearless_pool), inline=False)
 
+    _add_forgelens_status_field(
+        embed,
+        snapshot.get("draftStatus", "drafting"),
+        draft_id,
+        snapshot.get("forgelensMatchId", ""),
+        game_number,
+        snapshot.get("draftSequence", 1),
+    )
     embed.add_field(name="⏳ Current Turn", value=status, inline=False)
     embed.set_footer(text=f"GodForge v1.6 • Draft {draft_id}")
     return embed
@@ -549,9 +612,9 @@ def format_board_from_snapshot(snapshot: dict) -> discord.Embed:
 
 def format_draft_end_from_export(export: dict) -> discord.Embed:
     """Final summary embed built from an Activity DraftExport dict."""
-    draft_id = export.get("draftId", "?")
-    blue_captain = export.get("blueCaptain", {}).get("name", "Blue")
-    red_captain = export.get("redCaptain", {}).get("name", "Red")
+    draft_id = export.get("draftId") or export.get("draft_id", "?")
+    blue_captain = export.get("blueCaptain", export.get("blue_captain", {})).get("name", "Blue")
+    red_captain = export.get("redCaptain", export.get("red_captain", {})).get("name", "Red")
 
     embed = discord.Embed(
         title=f"🏁 Draft {draft_id} — Complete",
@@ -586,5 +649,13 @@ def format_draft_end_from_export(export: dict) -> discord.Embed:
     if fearless_pool:
         embed.add_field(name="🚫 Fearless Pool", value=", ".join(fearless_pool), inline=False)
 
+    _add_forgelens_status_field(
+        embed,
+        export.get("status", "draft_complete"),
+        draft_id,
+        export.get("forgelensMatchId", export.get("forgelens_match_id", "")),
+        export.get("gameNumber", export.get("game_number", 1)),
+        export.get("draftSequence", export.get("draft_sequence", 1)),
+    )
     embed.set_footer(text=f"GodForge v1.6 • Draft {draft_id}")
     return embed

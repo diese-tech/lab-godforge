@@ -43,15 +43,19 @@ Important status notes:
 
 ### Fearless Drafts
 
-- `.draft start @blue @red`, `.ban`, `.pick`, `.draft show`, `.draft next`, `.draft undo`, `.draft end`.
+- `.draft start @blue @red` still works standalone.
+- Optional ForgeLens linkage: `.draft start @blue @red --match FL-123 --game 2`.
+- `.ban`, `.pick`, `.draft show`, `.draft next`, `.draft undo`, `.draft end`.
 - Local fallback draft engine in `utils/draft.py`.
 - Optional Activity backend mode through HTTP/WebSocket when `ACTIVITY_BACKEND_URL` is set.
-- Draft exports are posted as JSON attachments at the end of a set.
+- Draft embeds expose a public `ForgeLens Status` field with `draft_status`, `draft_id`, optional `forgelens_match_id`, `game_number`, and `draft_sequence`.
+- Draft exports are posted as JSON attachments at the end of a set and use the stable GodForge -> ForgeLens handoff contract.
+- When claims finish, GodForge posts a visible `Draft complete` marker in-channel for observers.
 - Completed game picks, not bans, populate the fearless pool.
 
 ### Deprecated Economy Commands
 
-- `.match`, `.bet`, `.wallet`, and `.ledger` are deprecated in GodForge.
+- `.match`, `.bet`, `.wallet`, and `.ledger` are deprecated in GodForge and do not mutate Discord-side state.
 - ForgeLens owns betting, wallets, ledgers, results, OCR, stat tracking, and settlement.
 - GodForge keeps match orchestration in `.draft start`, `.ban`, `.pick`, `.draft next`, `.draft undo`, and `.draft end`.
 
@@ -61,7 +65,7 @@ Important status notes:
 - Development/combined API bridge under `web_api/`.
 - Combined Railway launcher in `railway_app.py` runs the Discord bot and web/API server in the same process container.
 - Public API endpoints for randomizer/build tools.
-- Protected admin endpoints still include legacy ledger/match/wallet surfaces during migration, plus settings, custom commands, audit, and bot status.
+- Protected admin endpoints still include legacy ledger/match/wallet surfaces during migration, but production mutations are guarded by `GODFORGE_ENABLE_LEGACY_ECONOMY=true`.
 - Temporary dashboard documents can use JSON or SQLite via `GODFORGE_STORAGE=sqlite`.
 
 ### Custom Commands
@@ -142,6 +146,7 @@ Without a count, build commands return 6 items. Counts outside 1-5 are ignored b
 | Command | Result |
 | --- | --- |
 | `.draft start @blue @red` | Start a draft set with blue/red captains |
+| `.draft start @blue @red --match FL-123 --game 2` | Start a draft linked to a ForgeLens match and explicit series game |
 | `.ban GodName` | Ban a god on the active captain's turn |
 | `.pick GodName` | Pick a god on the active captain's turn |
 | `.draft show` | Show draft history and fearless pool |
@@ -264,6 +269,7 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 | `BETTING_LEDGER_CHANNEL_ID` | Deprecated | Legacy betting ledger channel setting. ForgeLens owns ledgers. |
 | `PLACE_BETS_CHANNEL_ID` | Deprecated | Legacy bet placement channel setting. ForgeLens owns bets. |
 | `MATCH_DRAFT_CHANNEL_ID` | Deprecated | Legacy match draft setting. Draft orchestration uses `.draft` commands. |
+| `GODFORGE_ENABLE_LEGACY_ECONOMY` | Legacy only | Enables legacy web/API economy mutations. Leave unset in normal production. |
 | `HOST` | Web/API optional | Host binding for `web_api/server.py` or `railway_app.py`. Defaults differ between local API and Railway launcher. |
 | `PORT` | Web/API optional | Web/API port. Defaults to `8787`. |
 | `GODFORGE_ADMIN_PASSWORD` | Dashboard admin actions | Temporary password gate for protected dashboard actions. Do not use the placeholder value in production. |
@@ -278,7 +284,7 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 
 - Unknown dot commands are ignored unless a dashboard custom command matches.
 - `.match`, `.bet`, `.wallet`, and `.ledger` are routed to a deprecation response in `bot.py`.
-- Draft exports include `match_id`, guild/channel context, captains/teams, game data, draft order, fearless pool, and timestamps for ForgeLens import.
+- Draft exports include `schema_version`, `event_type`, `status`, `draft_id`, optional `forgelens_match_id`, legacy `match_id`, guild/channel context, game linkage, captains/teams, picks, bans, claims, timestamps, and draft order for ForgeLens import.
 - The reports channel map and one privileged user ID in `bot.py` are hard-coded single-tenant constants.
 - Session and draft cleanup runs every 5 minutes, but in-memory state is still lost on restart.
 - Data JSON is cached by loaders; restart the bot after changing god/build/alias data.
@@ -294,6 +300,19 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 - Audit Activity backend mode for retry, reconnect, and failure behavior around WebSocket draft state.
 - Tighten dashboard authorization so admin actions require verified Discord guild permissions.
 - Keep GodForge focused on match orchestration and portable draft handoff.
+
+## Draft JSON Contract
+
+- `draft_id` is GodForge-owned and stable for the draft session.
+- `forgelens_match_id` is optional and lets multiple draft exports link back to one ForgeLens match.
+- `match_id` is kept as a legacy alias for older consumers; do not assume it is the ForgeLens match id.
+- `status` is `draft_complete` only after picks/bans are finished and all drafted gods are claimed.
+
+## Bo3 / Bo5 Notes
+
+- A single ForgeLens match can observe multiple GodForge drafts or multiple game exports through the shared `forgelens_match_id`.
+- Use `--game` to label the current game number when starting an externally linked draft.
+- `draft_sequence` is included in embeds and JSON so ForgeLens has a stable contract field even when series handling expands later.
 
 ## Roadmap
 

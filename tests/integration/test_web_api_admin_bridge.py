@@ -103,6 +103,26 @@ def test_protected_admin_endpoints_reject_unauthenticated_writes(monkeypatch, tm
         _stop_server(httpd)
 
 
+def test_legacy_economy_mutation_endpoints_are_blocked_without_legacy_flag(monkeypatch, tmp_ledger, tmp_wallets):
+    monkeypatch.setenv("GODFORGE_ADMIN_PASSWORD", "secret-test")
+    monkeypatch.setattr(web_server, "LEGACY_ECONOMY_ENABLED", False)
+    httpd, base = _start_server()
+    try:
+        cookie = _login(base)
+        status, payload, _ = _request(
+            "POST",
+            f"{base}/api/match/create",
+            {"team1": "Solaris", "team2": "Onyx"},
+            cookie,
+        )
+
+        assert status == 400
+        assert "disabled" in payload["error"].lower()
+        assert ledger_utils.load_ledger()["matches"] == []
+    finally:
+        _stop_server(httpd)
+
+
 def test_wrong_password_does_not_unlock_admin_endpoints(monkeypatch, tmp_ledger, tmp_wallets):
     monkeypatch.setenv("GODFORGE_ADMIN_PASSWORD", "secret-test")
     httpd, base = _start_server()
