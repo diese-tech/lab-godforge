@@ -1,306 +1,349 @@
-# GodForge — Smite 2 Discord Bot
+# GodForge
 
-A Discord bot for randomizing Smite 2 god picks and item builds, with session tracking, competitive drafting, and a match betting system.
+## Overview
 
-God picks render as colored embed cards with the god's portrait. Build commands return plaintext numbered lists.
+GodForge is the core Smite 2 Discord operations bot for league play. It handles random god and build commands, temporary draft sessions, fearless draft workflows, match creation, betting, wallets, the live betting ledger, and early web dashboard/admin tooling.
 
-## Architecture Note
+It is built for Discord communities running Smite 2 draft nights or leagues where staff need one bot to coordinate picks, drafts, match IDs, betting windows, wallet balances, and weekly ledger operations.
 
-Stat tracking, OCR parsing, and future betting/ledger systems have been moved to:
+ForgeLens, the companion stats bot, owns post-match screenshot/OCR ingestion and league reporting. GodForge still owns the live operational flow, including the active betting/ledger subsystem.
 
-👉 https://github.com/diese-tech/smite2-stat-bot
+## Current Status
 
-GodForge is now intentionally scoped to:
+GodForge is active and production-ish for Discord league operations. The betting and wallet ledger is live, persisted in `data/`, and should be treated as depended-on operational state.
 
-* Session tracking
-* Draft logic (picks/bans)
-* Match ID generation
+The project also contains a local/static web dashboard and Python web API bridge. That dashboard bridge is release-candidate/staging work: it exposes useful admin surfaces, temporary password auth, staged Discord OAuth, JSON-or-SQLite dashboard storage, and local API endpoints, but full guild permission enforcement and durable production dashboard storage are still evolving.
 
-All post-match processing (stats, exports, ledger, betting) lives in the stat bot.
+Important status notes:
 
-This separation is deliberate to keep match orchestration lightweight and stat processing scalable.
+- Randomizer, build, session, local draft, match, betting, wallet, and ledger commands are implemented in `bot.py` and `utils/`.
+- Activity backend draft integration is optional and enabled only when `ACTIVITY_BACKEND_URL` is configured.
+- Session and local draft state are in memory and reset on process restart.
+- Ledger and wallet data persist as JSON files unless a dashboard storage setting is explicitly enabled for dashboard documents.
+- Some server/report routing is still single-tenant by hard-coded IDs in `bot.py`.
 
-## Required AI Workflow Review
+## Core Features
 
-Before beginning AI-assisted implementation, debugging, refactoring, migration, or production fix work in this repository, review [docs/AI_WORKFLOW_GUARDRAILS.md](./docs/AI_WORKFLOW_GUARDRAILS.md).
+### Random Gods And Builds
 
-Default behavior: smallest safe change, lowest blast radius, no unrelated file edits, no speculative rewrites, and explicit consideration of scale, queues, caching, indexes, retries, idempotency, rollback, and operational safety.
+- `.rg` and `.rg{role}{source}` random god commands.
+- `.roll5` and `.roll5{role}{source}` team-roll commands.
+- Role codes: `j` jungle, `m` mid, `a` ADC, `s` support, `o` solo.
+- Source codes: `w` website pool, `t` in-game tab pool.
+- Build commands for chaos, mid, jungle, solo, ADC, and support item pools.
+- Optional build item count from 1 to 5 on build commands.
+- God aliases and role/build data are loaded from JSON in `data/`, with static fallback data in `utils/static_data/`.
 
-## Commands
+### Draft Sessions
 
-### Gods
+- Per-channel `.session start/show/reset/end`.
+- Reaction-based pick locking for `.rg` and `.roll5` while a session is active.
+- Picked gods and unresolved active rolls are excluded from later rolls in that channel.
+- Sessions and drafts are mutually exclusive per channel.
 
-| Command   | Result                                       |
-|-----------|----------------------------------------------|
-| `.rg`     | Random god from the full Smite 2 roster      |
-| `.rgj`    | Random jungle god (website pool)             |
-| `.rgm`    | Random mid god (website pool)                |
-| `.rga`    | Random ADC god (website pool)                |
-| `.rgs`    | Random support god (website pool)            |
-| `.rgo`    | Random solo god (website pool)               |
-| `.roll5`  | 5 random gods from the full roster           |
-| `.roll5j` | 5 random jungle gods (website pool)          |
+### Fearless Drafts
 
-Append `w` for explicit website source or `t` for the in-game tab pool. For example: `.rgjw` (jungle, website), `.rgjt` (jungle, tab), `.rgmt` (mid, tab), `.roll5jt` (5 jungle gods from tab). Default source when omitted is website. Same source/role pattern works for `.roll5{role}{source}` as for `.rg{role}{source}`.
+- `.draft start @blue @red`, `.ban`, `.pick`, `.draft show`, `.draft next`, `.draft undo`, `.draft end`.
+- Local fallback draft engine in `utils/draft.py`.
+- Optional Activity backend mode through HTTP/WebSocket when `ACTIVITY_BACKEND_URL` is set.
+- Draft exports are posted as JSON attachments at the end of a set.
+- Completed game picks, not bans, populate the fearless pool.
 
-The **website pool** mirrors the curated god list from [smitedraft.com](https://smitedraft.com), the competitive draft tool. The **tab pool** mirrors the gods currently available in the in-game god select tab.
+### Match Betting And Ledger
 
-God embeds use buff-themed colors: jungle = yellow, mid = red, ADC = purple, support = green, solo = blue, random = white.
+- Admin match lifecycle commands: create, draft/lock betting, resolve winner, resolve prop.
+- Player bet placement for match winners and over/under stat props.
+- Wallet seeding, balance checks, admin give/take/set, and wallet wipe.
+- Persistent paginated betting ledger embed in the configured ledger channel.
+- Weekly ledger reset clears matches but leaves wallets intact.
+- JSON persistence uses atomic writes in `utils/ledger.py` and `utils/wallet.py`.
 
-**Weighting:** `.roll5` (no role) uses role-based weights to bias picks toward support/solo gods (weight 1.0) over mid/jungle/adc gods (weight 0.75). Gods in multiple role pools inherit their highest weight. Weights are configurable in `data/gods.json` under the `"weights"` section.
+### Web Dashboard And API Bridge
 
-### Builds
+- Static dashboard under `web/`.
+- Development/combined API bridge under `web_api/`.
+- Combined Railway launcher in `railway_app.py` runs the Discord bot and web/API server in the same process container.
+- Public API endpoints for randomizer/build tools.
+- Protected admin endpoints for ledger, match, wallet, settings, custom commands, audit, and bot status.
+- Temporary dashboard documents can use JSON or SQLite via `GODFORGE_STORAGE=sqlite`.
 
-Each build is 6 unique items pulled from the relevant pool, listed in the order players should buy them. Players choose their own starters, relics, and aspects.
+### Custom Commands
 
-| Command     | Result                                                 |
-|-------------|--------------------------------------------------------|
-| `.rc`       | Chaos build — 6 random items from the full master pool |
-| `.midint`   | Mid intelligence build                                 |
-| `.midstr`   | Mid strength build                                     |
-| `.jungint`  | Jungle intelligence build                              |
-| `.jungstr`  | Jungle strength build                                  |
-| `.soloint`  | Solo intelligence build                                |
-| `.solostr`  | Solo strength build                                    |
-| `.solohyb`  | Solo hybrid build                                      |
-| `.adc`      | Standard ADC build                                     |
-| `.adcstr`   | Strength-leaning ADC build                             |
-| `.adchyb`   | Hybrid ADC build                                       |
-| `.sup`      | Support build (single pool)                            |
+- Dashboard-configured custom dot commands are persisted by `utils/custom_commands.py`.
+- Unknown dot commands can execute matching enabled custom command configs.
+- Custom commands support channel gates, simple role gates, cooldowns, and mention suppression.
 
-Mid and jungle do not have hybrid pools; `.midhyb` and `.junghyb` are silently ignored.
+## Architecture / System Flow
 
-**Optional count:** Any build command can take a trailing number 1-5 for fewer items. For example: `.adcstr 3` returns 3 strength items, `.rc 1` returns a single chaos item, `.sup 4` returns 4 support items. Without a number, the default is 6. Numbers outside 1-5 are silently ignored.
+```mermaid
+flowchart TD
+    Discord["Discord messages / reactions"] --> Bot["bot.py"]
+    Bot --> Parser["utils.parser"]
+    Parser --> Randomizer["utils.loader + utils.picker + utils.formatter"]
+    Bot --> Sessions["utils.session - in-memory channel sessions"]
+    Bot --> Drafts["utils.draft - local in-memory drafts"]
+    Bot --> Ledger["utils.ledger - data/weekly_ledger.json"]
+    Bot --> Wallets["utils.wallet - data/wallets.json"]
+    Bot --> Custom["utils.custom_commands - JSON or dashboard store"]
+    Bot --> Activity["Optional Activity backend HTTP/WebSocket"]
+    Web["web static dashboard"] --> API["web_api/server.py"]
+    API --> Randomizer
+    API --> Ledger
+    API --> Wallets
+    API --> DashboardStore["utils.dashboard_store - JSON or SQLite"]
+    Railway["railway_app.py"] --> Bot
+    Railway --> API
+```
+
+Main data flow:
+
+1. Discord users issue dot commands.
+2. `bot.py` routes built-in betting commands directly and other commands through `utils.parser`.
+3. Randomizer/build commands read JSON data and return embeds or text.
+4. Sessions and local drafts are held in memory by channel ID.
+5. Match betting writes to `data/weekly_ledger.json`; wallets write to `data/wallets.json`.
+6. The live ledger embed stores its Discord message/channel pointer in the ledger JSON so the bot can edit or repost it.
+7. The optional web API reuses the same Python modules for dashboard/admin actions.
+
+## Commands / Usage
+
+### Random God Commands
+
+| Command | Result |
+| --- | --- |
+| `.rg` | Random god from the full roster |
+| `.rgj`, `.rgm`, `.rga`, `.rgs`, `.rgo` | Random god by role |
+| `.rgjw`, `.rgjt` | Random jungle god from website or tab source |
+| `.roll5` | Five random gods |
+| `.roll5j`, `.roll5m`, `.roll5a`, `.roll5s`, `.roll5o` | Five random gods by role |
+| `.roll5jt` | Five jungle gods from the tab source |
+
+Default source is `website`. Explicit sources are `w` for website and `t` for tab.
+
+### Build Commands
+
+| Command | Result |
+| --- | --- |
+| `.rc [1-5]` | Chaos build from the full item pool |
+| `.midint [1-5]`, `.midstr [1-5]` | Mid intelligence/strength builds |
+| `.jungint [1-5]`, `.jungstr [1-5]` | Jungle intelligence/strength builds |
+| `.soloint [1-5]`, `.solostr [1-5]`, `.solohyb [1-5]` | Solo builds |
+| `.adc [1-5]`, `.adcstr [1-5]`, `.adchyb [1-5]` | ADC builds |
+| `.sup [1-5]` | Support build |
+
+Without a count, build commands return 6 items. Counts outside 1-5 are ignored by the parser.
 
 ### Sessions
 
-Sessions enable draft tracking in a channel. When a session is active, `.rg` and `.roll5` produce interactive embeds with reaction buttons for locking picks. Picked gods are excluded from all future rolls in that channel until the session ends or resets.
+| Command | Result |
+| --- | --- |
+| `.session start` | Start a channel-scoped draft session |
+| `.session show` | Show locked picks |
+| `.session reset` | Clear picks while keeping the session active |
+| `.session end` | End the session and post a summary |
 
-| Command          | Result                                          |
-|------------------|-------------------------------------------------|
-| `.session start` | Start a draft session in this channel           |
-| `.session show`  | Show all picks made so far                      |
-| `.session reset` | Clear picks, keep session active (new game)     |
-| `.session end`   | End session, show final summary                 |
-
-**How it works during an active session:**
-
-1. Someone runs `.roll5jw` — bot posts 5 gods with 1️⃣-5️⃣ reactions
-2. Anyone taps a number — that god is locked to the person who reacted
-3. The embed updates to show the locked pick; reactions are removed
-4. That god will not appear in any future rolls for this session
-5. `.rg` works similarly but with ✅ (lock) and ❌ (discard) reactions
-
-Gods in open (unresolved) rolls are also excluded from new rolls, preventing the same god from appearing in two active rolls at once.
-
-Without an active session, `.rg` and `.roll5` behave normally (no reactions, no tracking).
-
-### Draft (fearless competitive drafting)
-
-The bot supports two draft modes. When `ACTIVITY_BACKEND_URL` is configured it connects to the Activity backend over HTTP and WebSocket. When the URL is not set it falls back to the local draft engine built into the bot.
-
-| Command                        | Result                                    |
-|--------------------------------|-------------------------------------------|
-| `.draft start @blue @red`      | Start a fearless draft set                |
-| `.ban GodName`                 | Ban a god (must be your turn)             |
-| `.pick GodName`                | Pick a god (must be your turn)            |
-| `.draft show`                  | Full draft history + fearless pool        |
-| `.draft next`                  | Lock current game, advance to next        |
-| `.draft undo`                  | Undo the last ban, pick, or game advance  |
-| `.draft end`                   | End set, post summary + JSON export       |
-
-**How it works:**
-
-1. Two captains are assigned (blue and red) when the draft starts
-2. Bot posts a living embed (draft board) showing bans, picks, and whose turn it is
-3. Turn order follows Smite 1 classic format (6 bans, 6 picks, 4 bans, 4 picks per game)
-4. Bot enforces turn order — only the correct captain can ban/pick on their turn
-5. When a game completes, `.draft next` advances to the next game. All **picks** (not bans) from completed games go into the fearless pool and are unavailable for the rest of the set
-6. `.draft end` posts a summary embed and attaches a JSON file with the full draft record
-
-**Activity backend mode:** When `ACTIVITY_BACKEND_URL` is set, `.draft start` registers the draft with the backend and opens a WebSocket listener. The draft board embed updates live as captains interact with the Discord Activity. Text commands (`.ban`, `.pick`, etc.) are forwarded to the backend.
-
-**Local fallback mode:** When `ACTIVITY_BACKEND_URL` is not set, the bot runs the draft engine locally. After `.draft start`, captains type `.ban` and `.pick` directly in the channel. When a game completes, claim embeds are posted with 1️⃣-5️⃣ reactions so players can assign gods to themselves.
-
-**God name matching:** Captains can type full names (`Baron Samedi`), aliases (`bs`, `mlf`, `swk`), or prefixes (`baron`, `pos`). Matching is case-insensitive. Aliases are defined in `data/aliases.json`.
-
-Sessions and drafts are mutually exclusive per channel — you cannot have both active at once.
-
-### Match betting (admin only)
-
-The betting system lets admins schedule matches and lets players wager points on outcomes. Betting commands are restricted to specific channels configured via environment variables (see Setup).
-
-#### Match lifecycle (admin)
-
-| Command                                        | Result                                                  |
-|------------------------------------------------|---------------------------------------------------------|
-| `.match create @TeamA @TeamB`                  | Create a match and open betting                         |
-| `.match draft GF-XXXX`                         | Lock betting, mark match in progress (run in handshake channel) |
-| `.match resolve GF-XXXX winner @Team`          | Pay out win bets and mark match completed               |
-| `.match resolve GF-XXXX prop @player stat val` | Settle an over/under prop bet                           |
-
-Match IDs are auto-assigned (`GF-0001`, `GF-0002`, …) and displayed in all responses.
-
-**Match statuses:**
-- `betting_open` — bets accepted
-- `in_progress` — draft active, betting locked
-- `completed` — winner resolved, win bets paid
-- `settled` — all props resolved, match fully closed
-
-#### Placing bets (players)
-
-Bets can only be placed in `#place-bets` while a match is `betting_open`.
+### Fearless Drafts
 
 | Command | Result |
-|---------|--------|
-| `.bet GF-XXXX amount @Team win` | Bet on a team to win |
-| `.bet GF-XXXX amount @player stat over\|under threshold` | Bet on a player stat prop |
+| --- | --- |
+| `.draft start @blue @red` | Start a draft set with blue/red captains |
+| `.ban GodName` | Ban a god on the active captain's turn |
+| `.pick GodName` | Pick a god on the active captain's turn |
+| `.draft show` | Show draft history and fearless pool |
+| `.draft next` | Lock the current game and advance |
+| `.draft undo` | Undo the last draft action or game advance |
+| `.draft end` | End the set and attach a JSON export |
 
-Example: `.bet GF-0001 100 @Omega win` — bet 100 pts on Omega to win match GF-0001.
-Example: `.bet GF-0001 50 @SabrinaG kills over 10.5` — bet 50 pts that SabrinaG gets more than 10.5 kills.
+### Match, Betting, Wallet, And Ledger
 
-**Wallets:** Each player starts with 500 points, auto-seeded on their first bet. Points are deducted when a bet is placed and returned with winnings on resolution. Payouts use pool-proportional math: `payout = (your_bet / winning_side_pool) × total_pool`.
-
-#### Wallet management (admin)
-
-| Command                         | Result                                      |
-|---------------------------------|---------------------------------------------|
-| `.wallet give @player amount`   | Add points to a player's balance            |
-| `.wallet take @player amount`   | Remove points from a player's balance       |
-| `.wallet set @player amount`    | Set a player's balance to an exact amount   |
-| `.wallet check @player`         | Show a player's current balance             |
-| `.wallet wipe`                  | Reset all wallets to 500 pts (backs up first) |
-
-#### Ledger
-
-| Command        | Result                                               |
-|----------------|------------------------------------------------------|
-| `.ledger reset`| Clear all matches for a new week (wallets untouched) |
-
-The `#betting-ledger` channel displays a persistent paginated embed showing each match with its status, win pools, and prop breakdowns. Use ⬅️ ➡️ to page between matches. The embed updates automatically whenever a match is created, a bet is placed, or a result is posted.
+| Command | Who | Result |
+| --- | --- | --- |
+| `.match create @TeamA @TeamB` | Admin | Create `GF-0001` style match and open betting |
+| `.match draft GF-XXXX` | Admin | Mark match in progress and lock betting |
+| `.match resolve GF-XXXX winner @Team` | Admin | Resolve winner and pay win bets |
+| `.match resolve GF-XXXX prop @player stat value` | Admin | Resolve over/under prop bets |
+| `.bet GF-XXXX amount @Team win` | Player | Bet on match winner |
+| `.bet GF-XXXX amount @player stat over|under threshold` | Player | Bet on a stat prop |
+| `.wallet check [@player]` | Any/admin target | Check a wallet balance |
+| `.wallet give @player amount` | Admin | Add points |
+| `.wallet take @player amount` | Admin | Remove points |
+| `.wallet set @player amount` | Admin | Set exact balance |
+| `.wallet wipe` | Admin | Reset all wallets to 500 points after backup |
+| `.ledger reset` | Admin | Clear weekly matches, preserve wallets |
+| `.ledger post` | Admin | Repost the live ledger embed |
 
 ### Utility
 
-| Command | Result                  |
-|---------|-------------------------|
-| `.help` | Show all commands       |
+| Command | Result |
+| --- | --- |
+| `.help` | Show bot command pages |
 
 ## Setup
 
-> Runtime modes:
-> - Bot-only mode: `DISCORD_TOKEN` required. Run `python bot.py`.
-> - Web API only (local dev): `PORT` optional. Run `python web_api/server.py` (protected endpoints require `GODFORGE_ADMIN_PASSWORD`).
-> - Combined Railway mode: all environment variables required. Run `python railway_app.py`.
-> - Warning: `GODFORGE_ADMIN_PASSWORD=change_me_for_dashboard` is a placeholder; dashboard auth will not be accepted until changed.
+### Prerequisites
 
-1. **Install dependencies:**
-   ```
-   pip install -r requirements.txt
-   ```
+- Python 3.11+ recommended.
+- A Discord bot token.
+- Discord Message Content Intent enabled.
+- Server Members Intent enabled if using role/member-dependent behavior.
+- Discord permissions: view/send messages, read history, add reactions, manage messages, embed links.
+- Railway or another persistent host for always-on production use.
 
-2. **Create a Discord bot:**
-   - Go to https://discord.com/developers/applications
-   - New Application → Bot → copy the token
-   - Under Bot settings, enable **Message Content Intent** and **Server Members Intent**
-   - Use OAuth2 URL Generator with scopes `bot` and permissions: `Send Messages`, `Read Message History`, `View Channels`, `Add Reactions`, `Manage Messages`, `Embed Links`
-   - The bot needs `Add Reactions` to post reaction buttons and `Manage Messages` to clear reactions after a pick is locked
+### Install
 
-3. **Configure environment variables:**
-
-   For **local testing:**
-   ```
-   cp .env.example .env
-   ```
-   Edit `.env` and fill in your values.
-
-   For **Railway / production:** set each variable in the platform's environment settings. The `.env` file is gitignored and only used locally.
-
-   | Variable | Required | Description |
-   |----------|----------|-------------|
-   | `DISCORD_TOKEN` | Yes | Bot token from the Developer Portal |
-   | `BETTING_LEDGER_CHANNEL_ID` | Yes | Channel ID for `#betting-ledger` |
-   | `PLACE_BETS_CHANNEL_ID` | Yes | Channel ID for `#place-bets` |
-   | `ACTIVITY_BACKEND_URL` | No | URL of the Activity draft backend — omit to use local draft mode |
-   | `ACTIVITY_API_KEY` | No | API key for the Activity backend |
-   | `GODFORGE_ADMIN_PASSWORD` | Web dashboard only | Temporary password gate for protected dashboard actions |
-
-4. **Run:**
-   ```
-   python bot.py
-   ```
-
-   To run the combined bot + dashboard service locally or on Railway after deployment approval:
-   ```
-   python railway_app.py
-   ```
-
-## File layout
-
-```
-godforge/
-  bot.py              # entry point, event handlers, reaction listener
-  requirements.txt
-  Procfile            # tells Railway/Heroku to run as a worker
-  .env.example
-  .gitignore
-  README.md
-  test_bot.py         # local tests (run with --sim for weight simulation)
-  data/
-    gods.json         # roster, role pools, weights
-    builds.json       # item master + role/type build pools
-    aliases.json      # god name shorthand aliases for draft commands
-    weekly_ledger.json# match history + bet records (reset each week)
-    wallets.json      # player point balances (persist across resets)
-  utils/
-    parser.py         # command string -> intent dict
-    picker.py         # random selection with exclusion + weighting
-    loader.py         # JSON loading + caching
-    formatter.py      # intent + result -> Discord embed or string
-    session.py        # per-channel random draft session tracking
-    draft.py          # per-channel fearless competitive draft system (local mode)
-    resolver.py       # god name resolution (exact/alias/prefix matching)
-    ledger.py         # match lifecycle and bet logic
-    wallet.py         # player point balance persistence
+```powershell
+pip install -r requirements.txt
 ```
 
-## Updating data
+For tests:
 
-When new gods drop or item pools shift, edit `data/gods.json` or `data/builds.json` directly. The bot caches data on first read, so a restart (or pushing a new commit on Railway) is required to pick up changes.
+```powershell
+pip install -r requirements-dev.txt
+```
 
-God portraits are pulled from SmiteFire's CDN (`smitefire.com/images/v2/god/icon/{slug}.png`). The slug is generated from the god's name (lowercase, spaces → hyphens). If a new god's portrait doesn't load, check that SmiteFire has added them to their site.
+### Run The Discord Bot
 
-**Tuning weights:** Edit the `"weights"` section in `data/gods.json` to adjust how heavily `.roll5` biases toward certain roles. Higher weight = more likely to appear. Run `python test_bot.py --sim` locally to see the effect of weight changes on pick distribution before deploying.
+```powershell
+python bot.py
+```
 
-## Notes
+### Run The Web API Locally
 
-- Unknown commands are silently ignored, by design — keeps the bot quiet in busy channels.
-- Errors (empty pool, malformed JSON, etc.) are surfaced to the user with a `⚠️` prefix and logged to the console.
-- Session and draft state lives in memory only — it resets if the bot restarts or redeploys. This is fine for sessions that last ~15 minutes.
-- Betting ledger and wallet data persist in `data/` JSON files and survive restarts.
-- Run `python test_bot.py` from a terminal to verify logic locally before deploying.
-- Run `python test_bot.py --sim` (optionally `--sim 5000`) to simulate weighted `.roll5` distribution.
+```powershell
+python web_api/server.py
+```
 
-## Versioning
+Default local URL:
 
-Version bumps happen when user-facing behavior changes — new commands, changed command behavior, or new features. Internal changes (hardening, data edits, README updates, bug fixes) do not bump the version.
+```text
+http://localhost:8787
+```
 
-The current version is displayed at the bottom of the `.help` command embeds. Update `GODFORGE_VERSION` in `utils/formatter.py` when shipping a new feature.
+### Run Static Dashboard Preview
 
-Release notes and release gates live in:
+```powershell
+cd web
+npm install
+npm run dev
+```
 
-- `VERSION_HISTORY.md`
-- `RELEASE_PROCESS.md`
-- `web/README.md`
-- `web_api/README.md`
+Default local URL:
 
-| Version | Changes |
-|---------|---------|
-| 1.0 | Initial bot — god picks, builds, all pools populated |
-| 1.1 | Embed formatting with god portraits and buff-themed colors |
-| 1.2 | `.roll5`, `.rc`, optional build count (1-5) |
-| 1.3 | `.help` command |
-| 1.4 | Role-based weighting for `.roll5` |
-| 1.5 | Sessions — reaction-based picks, god exclusion tracking |
-| 1.6 | Fearless draft system, god name resolver with aliases |
-| 2.0 | Match betting system — `.match`, `.bet`, `.wallet`, `.ledger`; persistent paginated ledger embed; Activity backend draft integration with local fallback |
-| 2.1.0-rc | Release candidate for live dashboard bridge — Discord OAuth staging, SQLite dashboard storage, MEE6-style admin surface |
+```text
+http://localhost:5173
+```
+
+### Run Combined Railway Mode
+
+```powershell
+python railway_app.py
+```
+
+`Procfile` runs:
+
+```text
+web: python railway_app.py
+```
+
+### Database / Storage Setup
+
+GodForge does not require a separate database for the Discord bot. Runtime state uses:
+
+| File | Purpose |
+| --- | --- |
+| `data/weekly_ledger.json` | Active weekly match ledger and bets |
+| `data/wallets.json` | Wallet balances |
+| `data/gods.json` | God roster, pools, weights |
+| `data/builds.json` | Item/build pools |
+| `data/aliases.json` | God aliases |
+| `data/custom_commands.json` | Dashboard custom command configs when JSON-backed |
+| `data/guild_settings.json` | Temporary dashboard guild settings when JSON-backed |
+| `data/admin_audit.json` | Dashboard/admin audit log |
+
+Dashboard document storage can optionally use SQLite:
+
+```text
+GODFORGE_STORAGE=sqlite
+GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
+```
+
+## Environment Variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `DISCORD_TOKEN` | Bot yes | Discord bot token. |
+| `ACTIVITY_BACKEND_URL` | No | Enables Activity backend draft mode when set. Omit for local draft mode. |
+| `ACTIVITY_API_KEY` | Activity backend only | API key sent as `X-Api-Key` to the Activity backend. |
+| `BETTING_LEDGER_CHANNEL_ID` | Betting yes | Discord channel ID for the persistent betting ledger embed. `0` disables posting and triggers warnings. |
+| `PLACE_BETS_CHANNEL_ID` | Recommended for betting | Restricts `.bet` commands to one channel. If `0`, bets are accepted from any channel. |
+| `MATCH_DRAFT_CHANNEL_ID` | Optional / verify before production | Read by `bot.py`; purpose should be verified before production changes. |
+| `HOST` | Web/API optional | Host binding for `web_api/server.py` or `railway_app.py`. Defaults differ between local API and Railway launcher. |
+| `PORT` | Web/API optional | Web/API port. Defaults to `8787`. |
+| `GODFORGE_ADMIN_PASSWORD` | Dashboard admin actions | Temporary password gate for protected dashboard actions. Do not use the placeholder value in production. |
+| `GODFORGE_SESSION_SECRET` | Dashboard recommended | Session signing secret. Falls back through admin password or Discord token if unset. |
+| `DISCORD_CLIENT_ID` | OAuth only | Discord OAuth client ID for dashboard login. |
+| `DISCORD_CLIENT_SECRET` | OAuth only | Discord OAuth client secret. Never commit it. |
+| `DISCORD_OAUTH_REDIRECT_URI` | OAuth optional | Dashboard OAuth callback URL. Defaults to the Railway URL in `web_api/server.py`. |
+| `GODFORGE_STORAGE` | Dashboard optional | Set to `sqlite` to use SQLite for dashboard document storage. |
+| `GODFORGE_DB_PATH` | Dashboard SQLite optional | SQLite DB path. Defaults to `data/godforge_dashboard.db`. |
+
+## Operational Notes
+
+- Unknown dot commands are ignored unless a dashboard custom command matches.
+- `.match`, `.bet`, `.wallet`, and `.ledger` bypass `utils.parser` and are routed directly in `bot.py`.
+- Admin checks use Discord administrator permissions in `bot.py`.
+- Wallets are seeded to 500 points on first bet. Admin-created wallets start at 0 unless explicitly adjusted.
+- Admin `.wallet take` can produce negative balances; this is documented in `utils/wallet.py`.
+- `resolve_prop_bets` treats exact threshold ties as no winner.
+- `.ledger reset` writes a backup to `data/weekly_ledger.bak.json` before clearing matches.
+- `.wallet wipe` writes a backup to `data/wallets.bak.json` before resetting balances.
+- The reports channel map and one privileged user ID in `bot.py` are hard-coded single-tenant constants.
+- Session and draft cleanup runs every 5 minutes, but in-memory state is still lost on restart.
+- Data JSON is cached by loaders; restart the bot after changing god/build/alias data.
+- Dashboard auth is transitional: temporary password and staged OAuth exist, but full guild permission enforcement is future work.
+
+## Known Issues / Refactor Targets
+
+- Move hard-coded guild/report routing into per-guild configuration.
+- Add or finish durable per-guild storage for settings, reports channels, and custom commands.
+- Decide whether ledger/wallet state should remain JSON or move to a transactional store before multi-server production use.
+- Review match ID generation and channel/server scoping before running one bot across unrelated leagues.
+- Persist or recover draft/session state if live drafts must survive restarts.
+- Audit Activity backend mode for retry, reconnect, and failure behavior around WebSocket draft state.
+- Tighten dashboard authorization so admin actions require verified Discord guild permissions.
+- Keep the betting/ledger subsystem active and stable; do not remove it as part of stats-bot separation work.
+
+## Roadmap
+
+- Stabilize the live dashboard bridge and OAuth permission checks.
+- Move single-tenant constants into guild-scoped config.
+- Add a safer durable backing store for operational data where JSON is too fragile.
+- Improve draft and match recovery after restarts.
+- Keep GodForge focused on live Discord operations while ForgeLens owns stats ingestion and reporting.
+
+## Contributing / Development Notes
+
+Read `docs/AI_WORKFLOW_GUARDRAILS.md` before AI-assisted implementation or production fixes.
+
+Keep changes small and operationally safe:
+
+- Do not change ledger or wallet behavior casually; existing data is live state.
+- Do not edit schema/data files without understanding migration and backup impact.
+- Add or update tests under `tests/` for command parsing, ledger, wallet, dashboard bridge, and concurrency behavior when touching those systems.
+- Run the focused test suite before deploying:
+
+```powershell
+pytest
+```
+
+Useful local checks:
+
+```powershell
+python test_bot.py
+python test_bot.py --sim
+cd web
+npm run test:security
+npm run test:dashboard
+```
+
+When adding user-facing bot behavior, update `utils/formatter.py` help text and `VERSION_HISTORY.md` if the change warrants a visible version bump.
