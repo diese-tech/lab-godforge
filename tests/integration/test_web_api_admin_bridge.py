@@ -557,6 +557,7 @@ def test_settings_rejects_bad_guild_ids_and_control_characters(monkeypatch, tmp_
 
 def test_admin_audit_requires_auth_and_records_mutations(monkeypatch, tmp_ledger, tmp_wallets, tmp_settings):
     monkeypatch.setenv("GODFORGE_ADMIN_PASSWORD", "secret-test")
+    monkeypatch.setattr(web_server, "LEGACY_ECONOMY_ENABLED", True)
     httpd, base = _start_server()
     try:
         status, payload, _ = _request("GET", f"{base}/api/admin/audit")
@@ -648,6 +649,7 @@ def test_audit_log_sanitizes_and_trims_malicious_metadata(tmp_audit):
 
 def test_admin_mutations_schedule_discord_ledger_refresh(monkeypatch, tmp_ledger, tmp_wallets):
     monkeypatch.setenv("GODFORGE_ADMIN_PASSWORD", "secret-test")
+    monkeypatch.setattr(web_server, "LEGACY_ECONOMY_ENABLED", True)
     calls = []
     monkeypatch.setattr(web_server, "_schedule_ledger_embed_refresh", lambda: calls.append("refresh") or True)
     httpd, base = _start_server()
@@ -683,6 +685,7 @@ def test_admin_mutations_schedule_discord_ledger_refresh(monkeypatch, tmp_ledger
 
 def test_reset_preserves_embed_pointer_for_in_place_discord_update(monkeypatch, tmp_ledger, tmp_wallets):
     monkeypatch.setenv("GODFORGE_ADMIN_PASSWORD", "secret-test")
+    monkeypatch.setattr(web_server, "LEGACY_ECONOMY_ENABLED", True)
     ledger_utils.create_match("@TeamA", "@TeamB")
     ledger_utils.update_embed_info(12345, 67890)
     httpd, base = _start_server()
