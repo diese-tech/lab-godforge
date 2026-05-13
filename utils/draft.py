@@ -23,8 +23,11 @@ import string
 import time
 from datetime import datetime, timezone
 
+from utils import match_ids
+
 # Drafts expire after 60 minutes of inactivity.
 DRAFT_TTL_SECONDS = 60 * 60
+DRAFT_EXPORT_SCHEMA_VERSION = 1
 
 # Turn sequence: (team, action) for each of the 20 steps per game.
 TURN_SEQUENCE = [
@@ -57,6 +60,19 @@ def _generate_draft_id() -> str:
     return f"GF-{''.join(chars)}"
 
 
+def export_draft_order() -> list[dict]:
+    """Return the canonical pick/ban order used by every game."""
+    return [
+        {
+            "step": index,
+            "team": team,
+            "action": action,
+            "phase": get_phase_label(index),
+        }
+        for index, (team, action) in enumerate(TURN_SEQUENCE)
+    ]
+
+
 def get_phase_label(step: int) -> str:
     """Return the current phase name for a given step index."""
     for start, end, label in PHASE_RANGES:
@@ -73,8 +89,8 @@ class GameState:
         self.bans = {"blue": [], "red": []}
         self.picks = {"blue": [], "red": []}
         self.step = 0
-        # Claims: god_name -> {"user_id": int, "name": str, "role": None, "stats": None}
-        # role and stats are reserved for future OCR/report features.
+        # Claims: god_name -> {"user_id": int, "name": str}
+        # Player-to-god assignment is draft context; ForgeLens owns stats/OCR.
         self.claims = {"blue": {}, "red": {}}
 
     def is_complete(self) -> bool:
@@ -104,8 +120,6 @@ class GameState:
         self.claims[team][god] = {
             "user_id": user_id,
             "name": user_name,
-            "role": None,
-            "stats": None,
         }
         return True
 
@@ -158,8 +172,6 @@ class GameState:
                 claims_export[side][god] = {
                     "user_id": info["user_id"],
                     "name": info["name"],
-                    "role": info["role"],
-                    "stats": info["stats"],
                 }
         return {
             "game_number": self.game_number,
@@ -175,8 +187,11 @@ class DraftState:
     def __init__(self, blue_captain_id: int, blue_captain_name: str,
                  red_captain_id: int, red_captain_name: str,
                  guild_id: int, guild_name: str,
-                 channel_id: int, channel_name: str):
-        self.draft_id = _generate_draft_id()
+                 channel_id: int, channel_name: str,
+                 match_id: str | None = None):
+        self.match_id = match_id or match_ids.reserve_match_id()
+        # Keep draft_id as a compatibility alias for existing embeds and tests.
+        self.draft_id = self.match_id
         self.active = True
         self.last_updated = time.monotonic()
         self.started_at = datetime.now(timezone.utc).isoformat()
@@ -322,15 +337,27 @@ class DraftState:
             all_games.append(self.current_game.to_dict())
 
         return {
+            "schema_version": DRAFT_EXPORT_SCHEMA_VERSION,
+            "producer": "GodForge",
+            "match_id": self.match_id,
             "draft_id": self.draft_id,
             "guild_id": self.guild_id,
             "guild_name": self.guild_name,
             "channel_id": self.channel_id,
             "channel_name": self.channel_name,
+            "teams": {
+                "blue": {"captain": dict(self.blue_captain)},
+                "red": {"captain": dict(self.red_captain)},
+            },
             "blue_captain": dict(self.blue_captain),
             "red_captain": dict(self.red_captain),
             "started_at": self.started_at,
             "ended_at": self.ended_at,
+            "timestamps": {
+                "started_at": self.started_at,
+                "ended_at": self.ended_at,
+            },
+            "draft_order": export_draft_order(),
             "games": all_games,
             "fearless_pool": sorted(self.fearless_pool),
         }
@@ -359,7 +386,8 @@ class DraftManager:
               blue_captain_id: int, blue_captain_name: str,
               red_captain_id: int, red_captain_name: str,
               guild_id: int, guild_name: str,
-              channel_name: str) -> DraftState | None:
+              channel_name: str,
+              match_id: str | None = None) -> DraftState | None:
         """Start a draft. Returns DraftState or None if one is already active."""
         if channel_id in self._drafts and self._drafts[channel_id].active:
             return None
@@ -368,6 +396,7 @@ class DraftManager:
             red_captain_id, red_captain_name,
             guild_id, guild_name,
             channel_id, channel_name,
+            match_id=match_id,
         )
         self._drafts[channel_id] = draft
         return draft

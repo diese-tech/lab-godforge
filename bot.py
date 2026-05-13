@@ -145,6 +145,13 @@ async def _update_embed_from_snapshot(snapshot: dict, channel) -> None:
 
 
 async def _post_export(export: dict, channel) -> None:
+    if isinstance(export.get("export"), dict):
+        export = export["export"]
+    guild = getattr(channel, "guild", None)
+    export.setdefault("guild_id", guild.id if guild else None)
+    export.setdefault("channel_id", channel.id)
+    export.setdefault("match_id", export.get("matchId") or export.get("draftId") or export.get("draft_id"))
+    export.setdefault("producer", "GodForge")
     draft_id = export.get("draftId", "unknown")
     embed = formatter.format_draft_end_from_export(export)
     await channel.send(embed=embed)
@@ -206,12 +213,7 @@ async def on_ready():
     log.info(f"Connected to {len(client.guilds)} guild(s)")
     if not cleanup_task.is_running():
         cleanup_task.start()
-    # Re-register the persistent betting embed view so buttons survive restarts.
-    client.add_view(BettingLedgerView())
-    try:
-        await update_betting_embed()
-    except Exception as exc:
-        log.warning(f"Could not refresh betting embed on startup: {exc}")
+    log.info("Economy commands are deprecated in GodForge; ForgeLens owns betting and ledgers.")
 
 
 @tasks.loop(minutes=5)
@@ -236,21 +238,12 @@ async def on_message(message: discord.Message):
     if not message.content.startswith("."):
         return
 
-    # ---- Betting system commands (bypass parser — not handled there) ----
+    # ---- Deprecated economy commands (bypass parser — not handled there) ----
     _first = message.content[1:].split()[0].lower() if message.content[1:].split() else ""
-    if _first == "match":
-        await _handle_match_command(message)
+    if _first in {"match", "bet", "wallet", "ledger"}:
+        await _handle_deprecated_economy_command(message, _first)
         return
-    if _first == "bet":
-        await _handle_bet_command(message)
-        return
-    if _first == "wallet":
-        await _handle_wallet_command(message)
-        return
-    if _first == "ledger":
-        await _handle_ledger_command(message)
-        return
-    # ---- End betting routing ----
+    # ---- End deprecated economy routing ----
 
     intent = parser.parse(message.content)
     if intent is None:
@@ -870,7 +863,7 @@ async def _handle_session_reaction(payload, info, message_id, channel_id, emoji)
                              f"in channel {channel_id}")
 
 
-# ── Betting system — shared helpers ──────────────────────────────────────────
+# ── Legacy economy helpers ───────────────────────────────────────────────────
 
 def _is_admin(message: discord.Message) -> bool:
     """True if the author is the bot owner or has server administrator permission."""
@@ -879,6 +872,14 @@ def _is_admin(message: discord.Message) -> bool:
     member = message.author
     perms = getattr(member, "guild_permissions", None)
     return bool(perms and perms.administrator)
+
+
+async def _handle_deprecated_economy_command(message: discord.Message, command: str):
+    await message.channel.send(
+        f"⚠️ `.{command}` is deprecated in GodForge. "
+        "ForgeLens owns betting, wallets, ledgers, results, and OCR/stat workflows. "
+        "Use GodForge draft commands for match orchestration and JSON handoff."
+    )
 
 
 async def _handle_custom_command(message: discord.Message, trigger: str) -> bool:
@@ -1064,7 +1065,7 @@ async def _post_wallets_to_reports(guild: discord.Guild | None):
 
 
 # ---------------------------------------------------------------------------
-# Persistent betting embed
+# Legacy persistent betting embed
 # ---------------------------------------------------------------------------
 
 # In-memory page cursor — resets to 0 on restart (acceptable).

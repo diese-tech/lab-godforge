@@ -17,6 +17,8 @@ import tempfile
 import threading
 from pathlib import Path
 
+from utils.match_ids import next_match_id
+
 LEDGER_PATH = Path("data/weekly_ledger.json")
 _LEDGER_LOCK = threading.Lock()
 log = logging.getLogger("godforge.ledger")
@@ -64,15 +66,7 @@ def save_ledger(data: dict):
 # ---------------------------------------------------------------------------
 
 def _next_match_id(matches: list) -> str:
-    max_num = 0
-    for m in matches:
-        mid = m.get("match_id", "")
-        if mid.startswith("GF-"):
-            try:
-                max_num = max(max_num, int(mid[3:]))
-            except ValueError:
-                pass
-    return f"GF-{max_num + 1:04d}"
+    return next_match_id(m.get("match_id") for m in matches)
 
 
 # ---------------------------------------------------------------------------

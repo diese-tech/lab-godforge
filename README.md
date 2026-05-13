@@ -2,24 +2,24 @@
 
 ## Overview
 
-GodForge is the core Smite 2 Discord operations bot for league play. It handles random god and build commands, temporary draft sessions, fearless draft workflows, match creation, betting, wallets, the live betting ledger, and early web dashboard/admin tooling.
+GodForge is the Smite 2 Discord match orchestration bot. It handles random god and build commands, temporary draft sessions, fearless draft workflows, match ID generation, and draft JSON handoff.
 
-It is built for Discord communities running Smite 2 draft nights or leagues where staff need one bot to coordinate picks, drafts, match IDs, betting windows, wallet balances, and weekly ledger operations.
+It is built for Discord communities running Smite 2 draft nights or leagues where staff need one bot to coordinate picks, drafts, match IDs, and portable draft records.
 
-ForgeLens, the companion stats bot, owns post-match screenshot/OCR ingestion and league reporting. GodForge still owns the live operational flow, including the active betting/ledger subsystem.
+ForgeLens, the companion stats bot, owns OCR, results, stat tracking, betting, wallets, ledgers, and settlement. GodForge and ForgeLens can run in different Discord servers, so GodForge hands off a portable draft JSON artifact instead of depending on shared server state.
 
 ## Current Status
 
-GodForge is active and production-ish for Discord league operations. The betting and wallet ledger is live, persisted in `data/`, and should be treated as depended-on operational state.
+GodForge is active and production-ish for Discord draft operations. Economy commands are deprecated in GodForge and should be handled by ForgeLens.
 
 The project also contains a local/static web dashboard and Python web API bridge. That dashboard bridge is release-candidate/staging work: it exposes useful admin surfaces, temporary password auth, staged Discord OAuth, JSON-or-SQLite dashboard storage, and local API endpoints, but full guild permission enforcement and durable production dashboard storage are still evolving.
 
 Important status notes:
 
-- Randomizer, build, session, local draft, match, betting, wallet, and ledger commands are implemented in `bot.py` and `utils/`.
+- Randomizer, build, session, and local draft commands are implemented in `bot.py` and `utils/`.
 - Activity backend draft integration is optional and enabled only when `ACTIVITY_BACKEND_URL` is configured.
 - Session and local draft state are in memory and reset on process restart.
-- Ledger and wallet data persist as JSON files unless a dashboard storage setting is explicitly enabled for dashboard documents.
+- Legacy ledger and wallet modules still exist for migration/testing, but they are not part of the active Discord command surface.
 - Some server/report routing is still single-tenant by hard-coded IDs in `bot.py`.
 
 ## Core Features
@@ -49,14 +49,11 @@ Important status notes:
 - Draft exports are posted as JSON attachments at the end of a set.
 - Completed game picks, not bans, populate the fearless pool.
 
-### Match Betting And Ledger
+### Deprecated Economy Commands
 
-- Admin match lifecycle commands: create, draft/lock betting, resolve winner, resolve prop.
-- Player bet placement for match winners and over/under stat props.
-- Wallet seeding, balance checks, admin give/take/set, and wallet wipe.
-- Persistent paginated betting ledger embed in the configured ledger channel.
-- Weekly ledger reset clears matches but leaves wallets intact.
-- JSON persistence uses atomic writes in `utils/ledger.py` and `utils/wallet.py`.
+- `.match`, `.bet`, `.wallet`, and `.ledger` are deprecated in GodForge.
+- ForgeLens owns betting, wallets, ledgers, results, OCR, stat tracking, and settlement.
+- GodForge keeps match orchestration in `.draft start`, `.ban`, `.pick`, `.draft next`, `.draft undo`, and `.draft end`.
 
 ### Web Dashboard And API Bridge
 
@@ -64,7 +61,7 @@ Important status notes:
 - Development/combined API bridge under `web_api/`.
 - Combined Railway launcher in `railway_app.py` runs the Discord bot and web/API server in the same process container.
 - Public API endpoints for randomizer/build tools.
-- Protected admin endpoints for ledger, match, wallet, settings, custom commands, audit, and bot status.
+- Protected admin endpoints still include legacy ledger/match/wallet surfaces during migration, plus settings, custom commands, audit, and bot status.
 - Temporary dashboard documents can use JSON or SQLite via `GODFORGE_STORAGE=sqlite`.
 
 ### Custom Commands
@@ -82,14 +79,12 @@ flowchart TD
     Parser --> Randomizer["utils.loader + utils.picker + utils.formatter"]
     Bot --> Sessions["utils.session - in-memory channel sessions"]
     Bot --> Drafts["utils.draft - local in-memory drafts"]
-    Bot --> Ledger["utils.ledger - data/weekly_ledger.json"]
-    Bot --> Wallets["utils.wallet - data/wallets.json"]
+    Drafts --> MatchIds["utils.match_ids - data/match_ids.json"]
     Bot --> Custom["utils.custom_commands - JSON or dashboard store"]
     Bot --> Activity["Optional Activity backend HTTP/WebSocket"]
     Web["web static dashboard"] --> API["web_api/server.py"]
     API --> Randomizer
-    API --> Ledger
-    API --> Wallets
+    API --> Legacy["legacy ledger/wallet surfaces"]
     API --> DashboardStore["utils.dashboard_store - JSON or SQLite"]
     Railway["railway_app.py"] --> Bot
     Railway --> API
@@ -98,12 +93,12 @@ flowchart TD
 Main data flow:
 
 1. Discord users issue dot commands.
-2. `bot.py` routes built-in betting commands directly and other commands through `utils.parser`.
+2. `bot.py` routes deprecated economy commands to a deprecation response and other commands through `utils.parser`.
 3. Randomizer/build commands read JSON data and return embeds or text.
 4. Sessions and local drafts are held in memory by channel ID.
-5. Match betting writes to `data/weekly_ledger.json`; wallets write to `data/wallets.json`.
-6. The live ledger embed stores its Discord message/channel pointer in the ledger JSON so the bot can edit or repost it.
-7. The optional web API reuses the same Python modules for dashboard/admin actions.
+5. Draft start reserves a portable `match_id` from `data/match_ids.json`.
+6. Draft end posts JSON for ForgeLens import.
+7. The optional web API reuses Python modules for dashboard/admin actions, including legacy migration surfaces.
 
 ## Commands / Usage
 
@@ -154,23 +149,14 @@ Without a count, build commands return 6 items. Counts outside 1-5 are ignored b
 | `.draft undo` | Undo the last draft action or game advance |
 | `.draft end` | End the set and attach a JSON export |
 
-### Match, Betting, Wallet, And Ledger
+### Deprecated Economy Commands
 
 | Command | Who | Result |
 | --- | --- | --- |
-| `.match create @TeamA @TeamB` | Admin | Create `GF-0001` style match and open betting |
-| `.match draft GF-XXXX` | Admin | Mark match in progress and lock betting |
-| `.match resolve GF-XXXX winner @Team` | Admin | Resolve winner and pay win bets |
-| `.match resolve GF-XXXX prop @player stat value` | Admin | Resolve over/under prop bets |
-| `.bet GF-XXXX amount @Team win` | Player | Bet on match winner |
-| `.bet GF-XXXX amount @player stat over|under threshold` | Player | Bet on a stat prop |
-| `.wallet check [@player]` | Any/admin target | Check a wallet balance |
-| `.wallet give @player amount` | Admin | Add points |
-| `.wallet take @player amount` | Admin | Remove points |
-| `.wallet set @player amount` | Admin | Set exact balance |
-| `.wallet wipe` | Admin | Reset all wallets to 500 points after backup |
-| `.ledger reset` | Admin | Clear weekly matches, preserve wallets |
-| `.ledger post` | Admin | Repost the live ledger embed |
+| `.match ...` | Any | Deprecated; ForgeLens owns match results and economy workflows |
+| `.bet ...` | Any | Deprecated; ForgeLens owns player bets |
+| `.wallet ...` | Any | Deprecated; ForgeLens owns wallet balances |
+| `.ledger ...` | Any | Deprecated; ForgeLens owns ledgers |
 
 ### Utility
 
@@ -251,8 +237,9 @@ GodForge does not require a separate database for the Discord bot. Runtime state
 
 | File | Purpose |
 | --- | --- |
-| `data/weekly_ledger.json` | Active weekly match ledger and bets |
-| `data/wallets.json` | Wallet balances |
+| `data/match_ids.json` | Orchestration match ID counter |
+| `data/weekly_ledger.json` | Legacy/deprecated match ledger and bets |
+| `data/wallets.json` | Legacy/deprecated wallet balances |
 | `data/gods.json` | God roster, pools, weights |
 | `data/builds.json` | Item/build pools |
 | `data/aliases.json` | God aliases |
@@ -274,9 +261,9 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 | `DISCORD_TOKEN` | Bot yes | Discord bot token. |
 | `ACTIVITY_BACKEND_URL` | No | Enables Activity backend draft mode when set. Omit for local draft mode. |
 | `ACTIVITY_API_KEY` | Activity backend only | API key sent as `X-Api-Key` to the Activity backend. |
-| `BETTING_LEDGER_CHANNEL_ID` | Betting yes | Discord channel ID for the persistent betting ledger embed. `0` disables posting and triggers warnings. |
-| `PLACE_BETS_CHANNEL_ID` | Recommended for betting | Restricts `.bet` commands to one channel. If `0`, bets are accepted from any channel. |
-| `MATCH_DRAFT_CHANNEL_ID` | Optional / verify before production | Read by `bot.py`; purpose should be verified before production changes. |
+| `BETTING_LEDGER_CHANNEL_ID` | Deprecated | Legacy betting ledger channel setting. ForgeLens owns ledgers. |
+| `PLACE_BETS_CHANNEL_ID` | Deprecated | Legacy bet placement channel setting. ForgeLens owns bets. |
+| `MATCH_DRAFT_CHANNEL_ID` | Deprecated | Legacy match draft setting. Draft orchestration uses `.draft` commands. |
 | `HOST` | Web/API optional | Host binding for `web_api/server.py` or `railway_app.py`. Defaults differ between local API and Railway launcher. |
 | `PORT` | Web/API optional | Web/API port. Defaults to `8787`. |
 | `GODFORGE_ADMIN_PASSWORD` | Dashboard admin actions | Temporary password gate for protected dashboard actions. Do not use the placeholder value in production. |
@@ -290,13 +277,8 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 ## Operational Notes
 
 - Unknown dot commands are ignored unless a dashboard custom command matches.
-- `.match`, `.bet`, `.wallet`, and `.ledger` bypass `utils.parser` and are routed directly in `bot.py`.
-- Admin checks use Discord administrator permissions in `bot.py`.
-- Wallets are seeded to 500 points on first bet. Admin-created wallets start at 0 unless explicitly adjusted.
-- Admin `.wallet take` can produce negative balances; this is documented in `utils/wallet.py`.
-- `resolve_prop_bets` treats exact threshold ties as no winner.
-- `.ledger reset` writes a backup to `data/weekly_ledger.bak.json` before clearing matches.
-- `.wallet wipe` writes a backup to `data/wallets.bak.json` before resetting balances.
+- `.match`, `.bet`, `.wallet`, and `.ledger` are routed to a deprecation response in `bot.py`.
+- Draft exports include `match_id`, guild/channel context, captains/teams, game data, draft order, fearless pool, and timestamps for ForgeLens import.
 - The reports channel map and one privileged user ID in `bot.py` are hard-coded single-tenant constants.
 - Session and draft cleanup runs every 5 minutes, but in-memory state is still lost on restart.
 - Data JSON is cached by loaders; restart the bot after changing god/build/alias data.
@@ -306,20 +288,20 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 
 - Move hard-coded guild/report routing into per-guild configuration.
 - Add or finish durable per-guild storage for settings, reports channels, and custom commands.
-- Decide whether ledger/wallet state should remain JSON or move to a transactional store before multi-server production use.
+- Remove or migrate remaining legacy ledger/wallet internals after ForgeLens owns the replacement flows.
 - Review match ID generation and channel/server scoping before running one bot across unrelated leagues.
 - Persist or recover draft/session state if live drafts must survive restarts.
 - Audit Activity backend mode for retry, reconnect, and failure behavior around WebSocket draft state.
 - Tighten dashboard authorization so admin actions require verified Discord guild permissions.
-- Keep the betting/ledger subsystem active and stable; do not remove it as part of stats-bot separation work.
+- Keep GodForge focused on match orchestration and portable draft handoff.
 
 ## Roadmap
 
 - Stabilize the live dashboard bridge and OAuth permission checks.
 - Move single-tenant constants into guild-scoped config.
-- Add a safer durable backing store for operational data where JSON is too fragile.
+- Add a safer durable backing store for orchestration data where JSON is too fragile.
 - Improve draft and match recovery after restarts.
-- Keep GodForge focused on live Discord operations while ForgeLens owns stats ingestion and reporting.
+- Keep GodForge focused on live draft operations while ForgeLens owns OCR, stats, results, betting, and ledgers.
 
 ## Contributing / Development Notes
 
@@ -327,9 +309,9 @@ Read `docs/AI_WORKFLOW_GUARDRAILS.md` before AI-assisted implementation or produ
 
 Keep changes small and operationally safe:
 
-- Do not change ledger or wallet behavior casually; existing data is live state.
+- Do not change legacy ledger or wallet internals casually; existing data may be migration state.
 - Do not edit schema/data files without understanding migration and backup impact.
-- Add or update tests under `tests/` for command parsing, ledger, wallet, dashboard bridge, and concurrency behavior when touching those systems.
+- Add or update tests under `tests/` for command parsing, draft handoff, dashboard bridge, and concurrency behavior when touching those systems.
 - Run the focused test suite before deploying:
 
 ```powershell

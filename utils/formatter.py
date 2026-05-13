@@ -262,39 +262,18 @@ def format_help_page1() -> discord.Embed:
         "_Aliases work: `.ban mlf`, `.pick baron`_"
     ), inline=False)
 
-    embed.set_footer(text=f"Page 1/2 — GodForge v{GODFORGE_VERSION} • use ➡️ for betting commands • {RELEASE_NOTES}")
+    embed.set_footer(text=f"Page 1/2 — GodForge v{GODFORGE_VERSION} • use ➡️ for deprecated economy notes • {RELEASE_NOTES}")
     return embed
 
 
 def format_help_page2() -> discord.Embed:
-    """Page 2 of the help embed: match betting, wallets, ledger."""
-    embed = discord.Embed(title="GodForge Commands — Betting", color=0x9B59B6)
+    """Page 2 of the help embed: deprecated economy surface."""
+    embed = discord.Embed(title="GodForge Commands — Deprecated Economy", color=0x95A5A6)
 
-    embed.add_field(name="Match lifecycle  (admin only)", value=(
-        "`.match create TeamA TeamB` — open a match for betting\n"
-        "`.match draft GF-XXXX` — lock betting, mark in progress\n"
-        "`.match resolve GF-XXXX winner Team` — pay out win bets\n"
-        "`.match resolve GF-XXXX prop @player stat value` — settle a prop"
-    ), inline=False)
-
-    embed.add_field(name="Placing bets  (#place-bets only)", value=(
-        "`.bet GF-XXXX amount Team win`\n"
-        "`.bet GF-XXXX amount @player stat over|under threshold`\n"
-        "`.wallet check` — your balance  |  `.wallet check @player` — theirs\n"
-        "_You start with 500 pts, auto-seeded on your first bet._"
-    ), inline=False)
-
-    embed.add_field(name="Wallets  (admin only)", value=(
-        "`.wallet give @player amount`\n"
-        "`.wallet take @player amount`\n"
-        "`.wallet set @player amount`\n"
-        "`.wallet wipe` — reset all to 500 pts"
-    ), inline=False)
-
-    embed.add_field(name="Ledger  (admin only)", value=(
-        "`.ledger reset` — clear all matches for a new week\n"
-        "`.ledger post` — repost the live embed in #betting-ledger\n"
-        "_#betting-ledger has a live paginated embed — use ⬅️ ➡️ to browse._"
+    embed.add_field(name="Moved to ForgeLens", value=(
+        "`.match`, `.bet`, `.wallet`, and `.ledger` are deprecated in GodForge.\n"
+        "ForgeLens owns betting, wallets, ledgers, results, OCR, and stat workflows.\n"
+        "Use `.draft start @blue @red` and `.draft end` for match orchestration and JSON handoff."
     ), inline=False)
 
     embed.set_footer(text=f"Page 2/2 — GodForge v{GODFORGE_VERSION} • use ⬅️ for main commands • {RELEASE_NOTES}")
