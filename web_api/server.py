@@ -36,6 +36,9 @@ from utils.resolver import resolve_god_name  # noqa: E402
 
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = int(os.getenv("PORT", "8787"))
+LEGACY_ECONOMY_ENABLED = os.getenv("GODFORGE_ENABLE_LEGACY_ECONOMY", "").strip().lower() in {
+    "1", "true", "yes", "on"
+}
 WEB_ROOT = ROOT / "web"
 SESSION_COOKIE = "godforge_admin"
 OAUTH_STATE_COOKIE = "godforge_oauth_state"
@@ -134,7 +137,11 @@ def _draft_payload(draft: DraftState) -> dict:
     turn = game.current_turn()
     return {
         "draftId": draft.draft_id,
+        "matchId": draft.match_id,
+        "forgelensMatchId": draft.forgelens_match_id,
         "gameNumber": game.game_number,
+        "draftSequence": draft.draft_sequence,
+        "draftStatus": draft.current_status(),
         "phase": get_phase_label(game.step),
         "step": game.step,
         "complete": game.is_complete(),
@@ -146,6 +153,15 @@ def _draft_payload(draft: DraftState) -> dict:
         "fearlessPool": sorted(draft.fearless_pool),
         "unavailableGods": sorted(draft.get_unavailable_gods()),
     }
+
+
+def _ensure_legacy_economy_enabled() -> None:
+    if LEGACY_ECONOMY_ENABLED:
+        return
+    raise ValueError(
+        "Legacy economy mutations are disabled in production. "
+        "Set GODFORGE_ENABLE_LEGACY_ECONOMY=true only for explicit legacy use."
+    )
 
 
 def _execute_intent(message: str) -> dict:
@@ -280,6 +296,8 @@ class Handler(BaseHTTPRequestHandler):
                     guild_name="Web Draft",
                     channel_id=0,
                     channel_name="web",
+                    forgelens_match_id=str(body.get("forgelensMatchId") or body.get("forgelens_match_id") or "").strip(),
+                    game_number=int(body.get("gameNumber") or body.get("game_number") or 1),
                 )
                 draft_rooms[draft.draft_id] = draft
                 self._send_json({"ok": True, "draft": _draft_payload(draft)})
@@ -315,12 +333,14 @@ class Handler(BaseHTTPRequestHandler):
                 draft_rooms.pop(draft.draft_id, None)
                 self._send_json({"ok": True, "export": export})
             elif parsed.path == "/api/match/create":
+                _ensure_legacy_economy_enabled()
                 team1 = _required_str(body, "team1")
                 team2 = _required_str(body, "team2")
                 match = ledger_utils.create_match(team1, team2)
                 _record_audit("match.create", match["match_id"], metadata={"team1": team1, "team2": team2})
                 self._send_json({"ok": True, "match": match, "discord_embed_update": _schedule_ledger_embed_refresh()})
             elif parsed.path == "/api/match/status":
+                _ensure_legacy_economy_enabled()
                 match_id = _match_id(body)
                 status = _required_str(body, "status")
                 if status not in MATCH_STATUSES:
@@ -332,6 +352,7 @@ class Handler(BaseHTTPRequestHandler):
                 _record_audit("match.status", match_id, metadata={"status": status})
                 self._send_json({"ok": True, "match": ledger_utils.get_match(match_id), "discord_embed_update": _schedule_ledger_embed_refresh()})
             elif parsed.path == "/api/match/resolve/winner":
+                _ensure_legacy_economy_enabled()
                 match_id = _match_id(body)
                 winner = _required_str(body, "winner")
                 if ledger_utils.get_match(match_id) is None:
@@ -342,6 +363,7 @@ class Handler(BaseHTTPRequestHandler):
                 _record_audit("match.resolve_winner", match_id, metadata={"winner": winner, "payouts": len(payouts)})
                 self._send_json({"ok": True, "match": ledger_utils.get_match(match_id), "payouts": payouts, "discord_embed_update": _schedule_ledger_embed_refresh()})
             elif parsed.path == "/api/match/resolve/prop":
+                _ensure_legacy_economy_enabled()
                 match_id = _match_id(body)
                 player = _required_str(body, "player")
                 stat = _required_str(body, "stat").lower()
@@ -354,6 +376,7 @@ class Handler(BaseHTTPRequestHandler):
                 _record_audit("match.resolve_prop", match_id, metadata={"player": player, "stat": stat, "payouts": len(payouts)})
                 self._send_json({"ok": True, "match": ledger_utils.get_match(match_id), "payouts": payouts, "had_bets": had_bets, "discord_embed_update": _schedule_ledger_embed_refresh()})
             elif parsed.path == "/api/bet/place":
+                _ensure_legacy_economy_enabled()
                 result = _place_bet(body)
                 _record_audit("bet.place", result["match"]["match_id"], metadata={"username": result["bet"]["username"], "amount": result["bet"]["amount"], "type": result["bet"]["type"]})
                 self._send_json({"ok": True, **result, "discord_embed_update": _schedule_ledger_embed_refresh()})
@@ -366,10 +389,12 @@ class Handler(BaseHTTPRequestHandler):
                 _record_audit("settings.update", settings["guild_id"], metadata={"updated_by": settings.get("updated_by")})
                 self._send_json({"ok": True, "settings": settings})
             elif parsed.path == "/api/wallet/adjust":
+                _ensure_legacy_economy_enabled()
                 wallet = _adjust_wallet(body)
                 _record_audit("wallet.adjust", wallet["username"], metadata={"action": body.get("action"), "amount": body.get("amount"), "balance": wallet["balance"]})
                 self._send_json({"ok": True, "wallet": wallet})
             elif parsed.path == "/api/ledger/reset":
+                _ensure_legacy_economy_enabled()
                 ledger = ledger_utils.load_ledger()
                 cleared = len(ledger.get("matches", []))
                 ledger_utils.reset_ledger()
