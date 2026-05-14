@@ -12,12 +12,15 @@ import types
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import namedtuple
 
 from utils import ledger as ledger_utils
 from utils import wallet as wallet_utils
 from utils import audit as audit_utils
 from utils import dashboard_store
 from web_api import server as web_server
+
+_Session = namedtuple("_Session", ["cookie", "csrf"])
 
 
 def _start_server():
@@ -42,7 +45,10 @@ def _request(method, url, payload=None, cookie=None, follow_redirects=True):
     request = urllib.request.Request(url, data=data, method=method)
     if payload is not None:
         request.add_header("Content-Type", "application/json")
-    if cookie:
+    if isinstance(cookie, _Session):
+        request.add_header("Cookie", cookie.cookie)
+        request.add_header("X-CSRF-Token", cookie.csrf)
+    elif cookie:
         request.add_header("Cookie", cookie)
 
     opener = urllib.request.build_opener() if follow_redirects else urllib.request.build_opener(_NoRedirect)
@@ -58,6 +64,17 @@ def _request(method, url, payload=None, cookie=None, follow_redirects=True):
         return exc.code, parsed, exc.headers
 
 
+def _parse_set_cookies(headers) -> dict[str, str]:
+    """Extract all Set-Cookie values keyed by cookie name."""
+    cookies = {}
+    for value in headers.get_all("Set-Cookie") or []:
+        name_val = value.split(";", 1)[0].strip()
+        if "=" in name_val:
+            name, val = name_val.split("=", 1)
+            cookies[name.strip()] = val.strip()
+    return cookies
+
+
 def _login(base):
     status, payload, headers = _request(
         "POST",
@@ -66,7 +83,13 @@ def _login(base):
     )
     assert status == 200
     assert payload["authenticated"] is True
-    return headers["Set-Cookie"].split(";", 1)[0]
+    cookies = _parse_set_cookies(headers)
+    session_val = cookies[web_server.SESSION_COOKIE]
+    csrf_val = cookies[web_server.CSRF_COOKIE]
+    return _Session(
+        cookie=f"{web_server.SESSION_COOKIE}={session_val}; {web_server.CSRF_COOKIE}={csrf_val}",
+        csrf=csrf_val,
+    )
 
 
 def test_public_health_and_tool_endpoints_do_not_require_auth(monkeypatch, tmp_ledger, tmp_wallets):
