@@ -20,7 +20,7 @@ from pathlib import Path
 from utils.match_ids import next_match_id
 
 LEDGER_PATH = Path("data/weekly_ledger.json")
-_LEDGER_LOCK = threading.Lock()
+_LEDGER_LOCK = threading.RLock()
 log = logging.getLogger("godforge.ledger")
 
 # ---------------------------------------------------------------------------
@@ -75,19 +75,20 @@ def _next_match_id(matches: list) -> str:
 
 def create_match(team1: str, team2: str) -> dict:
     """Create a new match and persist it. Returns the match object."""
-    ledger = load_ledger()
-    match_id = _next_match_id(ledger["matches"])
-    match = {
-        "match_id": match_id,
-        "teams": {"team1": team1, "team2": team2},
-        "status": "betting_open",
-        "bets": [],
-        "result": None,
-        "winner": None,
-        "resolved_props": [],
-    }
-    ledger["matches"].append(match)
-    save_ledger(ledger)
+    with _LEDGER_LOCK:
+        ledger = load_ledger()
+        match_id = _next_match_id(ledger["matches"])
+        match = {
+            "match_id": match_id,
+            "teams": {"team1": team1, "team2": team2},
+            "status": "betting_open",
+            "bets": [],
+            "result": None,
+            "winner": None,
+            "resolved_props": [],
+        }
+        ledger["matches"].append(match)
+        save_ledger(ledger)
     return match
 
 
@@ -102,12 +103,13 @@ def get_match(match_id: str) -> dict | None:
 
 
 def set_match_status(match_id: str, status: str):
-    ledger = load_ledger()
-    for m in ledger["matches"]:
-        if m["match_id"].upper() == match_id.upper():
-            m["status"] = status
-            save_ledger(ledger)
-            return
+    with _LEDGER_LOCK:
+        ledger = load_ledger()
+        for m in ledger["matches"]:
+            if m["match_id"].upper() == match_id.upper():
+                m["status"] = status
+                save_ledger(ledger)
+                return
 
 
 # ---------------------------------------------------------------------------
@@ -116,12 +118,13 @@ def set_match_status(match_id: str, status: str):
 
 def add_bet(match_id: str, bet: dict):
     """Append a bet record to the match's bets list."""
-    ledger = load_ledger()
-    for m in ledger["matches"]:
-        if m["match_id"].upper() == match_id.upper():
-            m["bets"].append(bet)
-            save_ledger(ledger)
-            return
+    with _LEDGER_LOCK:
+        ledger = load_ledger()
+        for m in ledger["matches"]:
+            if m["match_id"].upper() == match_id.upper():
+                m["bets"].append(bet)
+                save_ledger(ledger)
+                return
 
 
 # ---------------------------------------------------------------------------
@@ -162,39 +165,40 @@ def resolve_win_bets(match_id: str, winner: str) -> list[dict]:
     Returns list of {"user_id", "username", "payout"} dicts for wallet updates.
     Pool formula: payout = (user_bet / winning_pool) * total_pool
     """
-    ledger = load_ledger()
-    match = None
-    for m in ledger["matches"]:
-        if m["match_id"].upper() == match_id.upper():
-            match = m
-            break
-    if not match:
-        return []
+    with _LEDGER_LOCK:
+        ledger = load_ledger()
+        match = None
+        for m in ledger["matches"]:
+            if m["match_id"].upper() == match_id.upper():
+                match = m
+                break
+        if not match:
+            return []
 
-    if str(match.get("status", "")).lower() in {"completed", "settled"}:
-        log.warning("Skipping win resolution for already resolved match %s (status=%s)", match_id, match.get("status"))
-        return []
+        if str(match.get("status", "")).lower() in {"completed", "settled"}:
+            log.warning("Skipping win resolution for already resolved match %s (status=%s)", match_id, match.get("status"))
+            return []
 
-    win_bets = [b for b in match.get("bets", []) if b["type"] == "win"]
-    winning_bets = [b for b in win_bets if b["team"].lower() == winner.lower()]
+        win_bets = [b for b in match.get("bets", []) if b["type"] == "win"]
+        winning_bets = [b for b in win_bets if b["team"].lower() == winner.lower()]
 
-    total_pool = sum(b["amount"] for b in win_bets)
-    winning_pool = sum(b["amount"] for b in winning_bets)
+        total_pool = sum(b["amount"] for b in win_bets)
+        winning_pool = sum(b["amount"] for b in winning_bets)
 
-    payouts = []
-    if winning_pool > 0:
-        for bet in winning_bets:
-            payout = round((bet["amount"] / winning_pool) * total_pool)
-            payouts.append({
-                "user_id": bet["user_id"],
-                "username": bet["username"],
-                "payout": payout,
-            })
+        payouts = []
+        if winning_pool > 0:
+            for bet in winning_bets:
+                payout = round((bet["amount"] / winning_pool) * total_pool)
+                payouts.append({
+                    "user_id": bet["user_id"],
+                    "username": bet["username"],
+                    "payout": payout,
+                })
 
-    match["winner"] = winner
-    match["status"] = "completed"
-    save_ledger(ledger)
-    return payouts
+        match["winner"] = winner
+        match["status"] = "completed"
+        save_ledger(ledger)
+        return payouts
 
 
 def resolve_prop_bets(match_id: str, player: str, stat: str,
@@ -208,84 +212,82 @@ def resolve_prop_bets(match_id: str, player: str, stat: str,
     Returns (payouts, had_bets). had_bets is False when no matching bets exist.
     Sets match status to 'settled' when all unique props have been resolved.
     """
-    ledger = load_ledger()
-    match = None
-    for m in ledger["matches"]:
-        if m["match_id"].upper() == match_id.upper():
-            match = m
-            break
-    if not match:
-        return [], False
+    with _LEDGER_LOCK:
+        ledger = load_ledger()
+        match = None
+        for m in ledger["matches"]:
+            if m["match_id"].upper() == match_id.upper():
+                match = m
+                break
+        if not match:
+            return [], False
 
-    resolved_key = f"{player.lower()}:{stat.lower()}"
-    existing_resolved = {
-        f"{p.get('player','').lower()}:{p.get('stat','').lower()}"
-        for p in match.get("resolved_props", [])
-    }
-    if resolved_key in existing_resolved:
-        log.warning("Skipping duplicate prop resolution for %s on match %s", resolved_key, match_id)
-        return [], False
+        resolved_key = f"{player.lower()}:{stat.lower()}"
+        existing_resolved = {
+            f"{p.get('player','').lower()}:{p.get('stat','').lower()}"
+            for p in match.get("resolved_props", [])
+        }
+        if resolved_key in existing_resolved:
+            log.warning("Skipping duplicate prop resolution for %s on match %s", resolved_key, match_id)
+            return [], False
 
-    prop_bets = [
-        b for b in match.get("bets", [])
-        if (b["type"] == "prop"
-            and b["player"].lower() == player.lower()
-            and b["stat"].lower() == stat.lower())
-    ]
+        prop_bets = [
+            b for b in match.get("bets", [])
+            if (b["type"] == "prop"
+                and b["player"].lower() == player.lower()
+                and b["stat"].lower() == stat.lower())
+        ]
 
-    if not prop_bets:
-        return [], False
+        if not prop_bets:
+            return [], False
 
-    # Threshold comes from the stored bets (first found; all should agree)
-    threshold = prop_bets[0]["threshold"]
+        threshold = prop_bets[0]["threshold"]
 
-    if actual_value > threshold:
-        winning_direction = "over"
-    elif actual_value < threshold:
-        winning_direction = "under"
-    else:
-        winning_direction = None  # exact tie, nobody wins
+        if actual_value > threshold:
+            winning_direction = "over"
+        elif actual_value < threshold:
+            winning_direction = "under"
+        else:
+            winning_direction = None  # exact tie, nobody wins
 
-    winning_bets = [b for b in prop_bets if b["direction"] == winning_direction] if winning_direction else []
-    total_pool = sum(b["amount"] for b in prop_bets)
-    winning_pool = sum(b["amount"] for b in winning_bets)
+        winning_bets = [b for b in prop_bets if b["direction"] == winning_direction] if winning_direction else []
+        total_pool = sum(b["amount"] for b in prop_bets)
+        winning_pool = sum(b["amount"] for b in winning_bets)
 
-    payouts = []
-    if winning_pool > 0:
-        for bet in winning_bets:
-            payout = round((bet["amount"] / winning_pool) * total_pool)
-            payouts.append({
-                "user_id": bet["user_id"],
-                "username": bet["username"],
-                "payout": payout,
-            })
+        payouts = []
+        if winning_pool > 0:
+            for bet in winning_bets:
+                payout = round((bet["amount"] / winning_pool) * total_pool)
+                payouts.append({
+                    "user_id": bet["user_id"],
+                    "username": bet["username"],
+                    "payout": payout,
+                })
 
-    # Track resolved prop
-    if "resolved_props" not in match:
-        match["resolved_props"] = []
-    match["resolved_props"].append({
-        "player": player,
-        "stat": stat,
-        "actual_value": actual_value,
-        "threshold": threshold,
-        "winning_direction": winning_direction,
-    })
+        if "resolved_props" not in match:
+            match["resolved_props"] = []
+        match["resolved_props"].append({
+            "player": player,
+            "stat": stat,
+            "actual_value": actual_value,
+            "threshold": threshold,
+            "winning_direction": winning_direction,
+        })
 
-    # Check if all unique player+stat props in bets are now resolved
-    all_prop_keys = {
-        f"{b['player'].lower()}:{b['stat'].lower()}"
-        for b in match.get("bets", [])
-        if b["type"] == "prop"
-    }
-    resolved_keys = {
-        f"{p['player'].lower()}:{p['stat'].lower()}"
-        for p in match["resolved_props"]
-    }
-    if all_prop_keys and all_prop_keys == resolved_keys:
-        match["status"] = "settled"
+        all_prop_keys = {
+            f"{b['player'].lower()}:{b['stat'].lower()}"
+            for b in match.get("bets", [])
+            if b["type"] == "prop"
+        }
+        resolved_keys = {
+            f"{p['player'].lower()}:{p['stat'].lower()}"
+            for p in match["resolved_props"]
+        }
+        if all_prop_keys and all_prop_keys == resolved_keys:
+            match["status"] = "settled"
 
-    save_ledger(ledger)
-    return payouts, True
+        save_ledger(ledger)
+        return payouts, True
 
 
 # ---------------------------------------------------------------------------
@@ -293,10 +295,11 @@ def resolve_prop_bets(match_id: str, player: str, stat: str,
 # ---------------------------------------------------------------------------
 
 def update_embed_info(message_id: int, channel_id: int):
-    ledger = load_ledger()
-    ledger["embed_message_id"] = message_id
-    ledger["embed_channel_id"] = channel_id
-    save_ledger(ledger)
+    with _LEDGER_LOCK:
+        ledger = load_ledger()
+        ledger["embed_message_id"] = message_id
+        ledger["embed_channel_id"] = channel_id
+        save_ledger(ledger)
 
 
 def get_embed_info() -> tuple[int | None, int | None]:

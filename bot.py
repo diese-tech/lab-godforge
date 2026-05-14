@@ -535,12 +535,17 @@ async def _handle_draft_local(intent: dict, message: discord.Message):
         if active == "draft":
             return formatter.format_error("A draft is already active in this channel. Use `.draft end` first.")
 
+        options = _draft_start_options(message.content)
         mentions = message.mentions
         if len(mentions) < 2:
-            return formatter.format_error("Usage: `.draft start @blue_captain @red_captain`")
+            return formatter.format_error(
+                "Usage: `.draft start @blue_captain @red_captain [--match FL-123] [--game 2]`"
+            )
         blue_user, red_user = mentions[0], mentions[1]
         if blue_user.id == red_user.id:
             return formatter.format_error("Blue and red captains must be different users.")
+        if options["game_number"] < 1:
+            return formatter.format_error("`--game` must be 1 or greater.")
 
         guild = message.guild
         draft = drafts.start(
