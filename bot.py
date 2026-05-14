@@ -71,6 +71,32 @@ drafts = DraftManager()
 _tracked_messages = {}
 _custom_command_cooldowns: dict[tuple[str, str, int], float] = {}
 
+_ACTIVE_DRAFTS_FILE = os.path.join("data", "active_local_drafts.json")
+
+
+def _load_active_drafts() -> dict:
+    try:
+        with open(_ACTIVE_DRAFTS_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def _save_active_draft(channel_id: int, draft_id: str):
+    data = _load_active_drafts()
+    data[str(channel_id)] = draft_id
+    os.makedirs("data", exist_ok=True)
+    with open(_ACTIVE_DRAFTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+
+
+def _remove_active_draft(channel_id: int):
+    data = _load_active_drafts()
+    if str(channel_id) in data:
+        data.pop(str(channel_id))
+        with open(_ACTIVE_DRAFTS_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+
 # Activity backend draft tracking (in-memory, resets on restart).
 _match_ids: dict[int, str] = {}           # channel_id -> match_id
 _match_channels: dict[str, int] = {}      # match_id -> channel_id
@@ -255,6 +281,24 @@ async def on_ready():
         cleanup_task.start()
     log.info("Economy commands are deprecated in GodForge; ForgeLens owns betting and ledgers.")
 
+    orphaned = _load_active_drafts()
+    if orphaned:
+        try:
+            os.remove(_ACTIVE_DRAFTS_FILE)
+        except OSError:
+            pass
+        for channel_id_str in orphaned:
+            ch = client.get_channel(int(channel_id_str))
+            if ch:
+                try:
+                    await ch.send(
+                        "⚠️ GodForge restarted — the active draft was lost. "
+                        "Please start a new one with `.draft start`."
+                    )
+                except (discord.Forbidden, discord.HTTPException):
+                    pass
+        log.info(f"Notified {len(orphaned)} channel(s) of lost draft(s) after restart")
+
 
 @tasks.loop(minutes=5)
 async def cleanup_task():
@@ -269,6 +313,12 @@ async def cleanup_task():
     expired_drafts = drafts.cleanup_expired()
     if expired_drafts:
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
+
+
+@cleanup_task.error
+async def cleanup_task_error(exc: Exception):
+    log.error(f"cleanup_task crashed: {exc!r} — restarting")
+    cleanup_task.restart()
 
 
 @client.event
@@ -566,6 +616,7 @@ async def _handle_draft_local(intent: dict, message: discord.Message):
         embed = formatter.format_draft_board(draft)
         sent = await message.channel.send(embed=embed)
         draft.board_message_id = sent.id
+        _save_active_draft(channel_id, draft.draft_id)
         log.info(f"Draft {draft.draft_id} started in channel {channel_id}: "
                  f"🔵 {blue_user.display_name} vs 🔴 {red_user.display_name}")
         return None
@@ -616,6 +667,7 @@ async def _handle_draft_local(intent: dict, message: discord.Message):
                     log.info(f"Draft {draft.draft_id} report posted to reports channel")
                 except (discord.Forbidden, discord.HTTPException) as e:
                     log.warning(f"Failed to post to reports channel: {e}")
+        _remove_active_draft(channel_id)
         log.info(f"Draft {draft.draft_id} ended: {len(export['games'])} game(s)")
         return None
 

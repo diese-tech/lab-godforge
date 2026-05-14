@@ -17,6 +17,7 @@ import hmac
 import mimetypes
 import os
 import re
+import secrets
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -41,6 +42,7 @@ LEGACY_ECONOMY_ENABLED = os.getenv("GODFORGE_ENABLE_LEGACY_ECONOMY", "").strip()
 }
 WEB_ROOT = ROOT / "web"
 SESSION_COOKIE = "godforge_admin"
+CSRF_COOKIE = "godforge_csrf"
 OAUTH_STATE_COOKIE = "godforge_oauth_state"
 SESSION_MAX_AGE = 60 * 60 * 12
 DISCORD_API_BASE = "https://discord.com/api/"
@@ -267,12 +269,15 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             body = self._read_body()
+            if parsed.path in PROTECTED_POST_PATHS:
+                if not self._require_auth():
+                    return
+                if not self._require_csrf():
+                    return
             if parsed.path == "/api/auth/login":
                 self._login(body)
             elif parsed.path == "/api/auth/logout":
                 self._logout()
-            elif parsed.path in PROTECTED_POST_PATHS and not self._require_auth():
-                return
             elif parsed.path == "/api/command":
                 self._send_json({"ok": True, "result": _execute_intent(body.get("message", ""))})
             elif parsed.path == "/api/commands/custom":
@@ -461,6 +466,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         token = _sign_session(int(time.time()) + SESSION_MAX_AGE)
+        csrf_token = secrets.token_hex(32)
         payload = {"ok": True, "authenticated": True}
         data = json.dumps(payload).encode("utf-8")
         self.send_response(200)
@@ -468,6 +474,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", _allowed_origin(self.headers.get("Origin", "")))
         self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Set-Cookie", _cookie_header(token))
+        self.send_header("Set-Cookie", _csrf_cookie_header(csrf_token))
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -524,8 +531,10 @@ class Handler(BaseHTTPRequestHandler):
 
         session = _sign_session(int(time.time()) + SESSION_MAX_AGE)
         self.send_response(302)
+        csrf_token = secrets.token_hex(32)
         self.send_header("Location", "/#dashboard?auth=discord")
         self.send_header("Set-Cookie", _cookie_header(session))
+        self.send_header("Set-Cookie", _csrf_cookie_header(csrf_token))
         self.send_header("Set-Cookie", f"{OAUTH_STATE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -546,6 +555,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", _allowed_origin(self.headers.get("Origin", "")))
         self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
+        self.send_header("Set-Cookie", f"{CSRF_COOKIE}=; Path=/; Max-Age=0; SameSite=Strict")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
@@ -557,6 +567,14 @@ class Handler(BaseHTTPRequestHandler):
         if self._is_authenticated():
             return True
         self._send_error(401, "Admin login required.")
+        return False
+
+    def _require_csrf(self) -> bool:
+        header_token = self.headers.get("X-CSRF-Token", "")
+        cookie_token = _cookies(self.headers.get("Cookie", "")).get(CSRF_COOKIE, "")
+        if header_token and cookie_token and hmac.compare_digest(header_token, cookie_token):
+            return True
+        self._send_error(403, "CSRF validation failed.")
         return False
 
     def log_message(self, format, *args):  # noqa: A002
@@ -1025,6 +1043,10 @@ def _run_discord_request(coro):
 
 def _cookie_header(token: str, name: str = SESSION_COOKIE, max_age: int = SESSION_MAX_AGE) -> str:
     return f"{name}={token}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax"
+
+
+def _csrf_cookie_header(token: str) -> str:
+    return f"{CSRF_COOKIE}={token}; Path=/; Max-Age={SESSION_MAX_AGE}; SameSite=Strict"
 
 
 def _cookies(raw_cookie: str) -> dict[str, str]:
