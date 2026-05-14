@@ -409,6 +409,8 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         if length <= 0:
             return {}
+        if length > 65536:
+            raise ValueError("Request body too large (max 64 KB)")
         raw = self.rfile.read(length).decode("utf-8")
         return json.loads(raw or "{}")
 
@@ -416,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+        self.send_header("Access-Control-Allow-Origin", _allowed_origin(self.headers.get("Origin", "")))
         self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
@@ -463,7 +465,7 @@ class Handler(BaseHTTPRequestHandler):
         data = json.dumps(payload).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+        self.send_header("Access-Control-Allow-Origin", _allowed_origin(self.headers.get("Origin", "")))
         self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Set-Cookie", _cookie_header(token))
         self.send_header("Content-Length", str(len(data)))
@@ -541,7 +543,7 @@ class Handler(BaseHTTPRequestHandler):
         data = json.dumps({"ok": True, "authenticated": False}).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Access-Control-Allow-Origin", self.headers.get("Origin", "*"))
+        self.send_header("Access-Control-Allow-Origin", _allowed_origin(self.headers.get("Origin", "")))
         self.send_header("Access-Control-Allow-Credentials", "true")
         self.send_header("Set-Cookie", f"{SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax")
         self.send_header("Content-Length", str(len(data)))
@@ -858,6 +860,13 @@ def _bot_status() -> dict:
         }
 
 
+def _allowed_origin(request_origin: str) -> str:
+    configured = os.getenv("GODFORGE_ALLOWED_ORIGIN", "")
+    if configured:
+        return configured
+    return request_origin or "*"
+
+
 def _admin_password() -> str:
     return os.getenv("GODFORGE_ADMIN_PASSWORD", "")
 
@@ -867,13 +876,20 @@ def _auth_configured() -> bool:
 
 
 def _session_secret_raw() -> str:
-    return (
+    secret = (
         os.getenv("GODFORGE_SESSION_SECRET", "")
         or _admin_password()
         or _discord_client_secret()
         or os.getenv("DISCORD_TOKEN", "")
-        or "godforge-local-dev"
     )
+    if not secret:
+        import logging
+        logging.getLogger("godforge.web").warning(
+            "No session secret configured — using insecure default. "
+            "Set GODFORGE_SESSION_SECRET in production."
+        )
+        return "godforge-local-dev"
+    return secret
 
 
 def _session_secret_configured() -> bool:

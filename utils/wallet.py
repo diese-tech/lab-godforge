@@ -17,7 +17,7 @@ from pathlib import Path
 
 WALLETS_PATH = Path("data/wallets.json")
 SEED_AMOUNT = 500
-_WALLET_LOCK = threading.Lock()
+_WALLET_LOCK = threading.RLock()
 
 
 # ---------------------------------------------------------------------------
@@ -63,16 +63,15 @@ def seed_wallet(user_id: int, username: str) -> int:
     Auto-seed wallet at SEED_AMOUNT if this user has no entry.
     Returns the current balance (whether seeded or pre-existing).
     """
-    wallets = load_wallets()
     uid = str(user_id)
-    if uid not in wallets:
-        wallets[uid] = {"username": username, "balance": SEED_AMOUNT}
+    with _WALLET_LOCK:
+        wallets = load_wallets()
+        if uid not in wallets:
+            wallets[uid] = {"username": username, "balance": SEED_AMOUNT}
+        else:
+            wallets[uid]["username"] = username
         save_wallets(wallets)
-    else:
-        # Keep username fresh
-        wallets[uid]["username"] = username
-        save_wallets(wallets)
-    return wallets[uid]["balance"]
+        return wallets[uid]["balance"]
 
 
 def get_balance(user_id: int) -> int | None:
@@ -94,10 +93,11 @@ def update_balance(user_id: int, delta: int) -> int:
 
 def set_balance(user_id: int, amount: int) -> int:
     """Set user's balance to an exact amount. Returns new balance."""
-    wallets = load_wallets()
     uid = str(user_id)
-    wallets[uid]["balance"] = amount
-    save_wallets(wallets)
+    with _WALLET_LOCK:
+        wallets = load_wallets()
+        wallets[uid]["balance"] = amount
+        save_wallets(wallets)
     return amount
 
 
@@ -107,24 +107,26 @@ def ensure_wallet(user_id: int, username: str) -> int:
     rather than the seed amount — for admin give/take/set on non-betters).
     Returns current balance.
     """
-    wallets = load_wallets()
     uid = str(user_id)
-    if uid not in wallets:
-        wallets[uid] = {"username": username, "balance": 0}
-        save_wallets(wallets)
-    return wallets[uid]["balance"]
+    with _WALLET_LOCK:
+        wallets = load_wallets()
+        if uid not in wallets:
+            wallets[uid] = {"username": username, "balance": 0}
+            save_wallets(wallets)
+        return wallets[uid]["balance"]
 
 
 def apply_payouts(payouts: list[dict]):
     """Bulk-add payout amounts to wallets. Skips unknown user IDs gracefully."""
     if not payouts:
         return
-    wallets = load_wallets()
-    for p in payouts:
-        uid = str(p["user_id"])
-        if uid in wallets:
-            wallets[uid]["balance"] += p["payout"]
-    save_wallets(wallets)
+    with _WALLET_LOCK:
+        wallets = load_wallets()
+        for p in payouts:
+            uid = str(p["user_id"])
+            if uid in wallets:
+                wallets[uid]["balance"] += p["payout"]
+        save_wallets(wallets)
 
 
 def _atomic_write_json(path: Path, data: dict):

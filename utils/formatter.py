@@ -10,7 +10,7 @@ import re
 import discord
 
 
-GODFORGE_VERSION = "2.1.0-rc"
+GODFORGE_VERSION = "2.2.0"
 RELEASE_NOTES = "Release notes: VERSION_HISTORY.md"
 
 # Buff-themed role colors (Smite 2 has no green buff; support takes green).
