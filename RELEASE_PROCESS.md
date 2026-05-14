@@ -18,24 +18,31 @@ Use this checklist whenever GodForge moves from a release candidate to a tagged 
 - `web_api/README.md`
   - API/env/storage notes.
 
-## v2.1.0 Release Gate
+## v2.1.0 Release Gate — Completed
 
-Tag `v2.1.0` only after:
+All gates passed. v2.1.0 shipped with the live dashboard bridge, Discord OAuth, SQLite storage, and admin surfaces.
 
-- Discord OAuth works live at `https://godforge-hub.up.railway.app/api/auth/discord/callback`.
-- Railway boots with `GODFORGE_STORAGE=sqlite`.
-- Dashboard settings, audit, and custom command config persist in `/app/data/godforge_dashboard.db`.
-- Bot login, match ops, betting, wallet actions, ledger reset, and Discord ledger sync still work live.
+## v2.2.0 Release Gate — Completed
+
+All gates passed. v2.2.0 shipped with the ForgeLens handoff contract, orchestration bot hardening, CSRF protection, crash fixes, and dependency pinning. See `VERSION_HISTORY.md` for full scope.
+
+## v2.3.0 Release Gate
+
+Tag `v2.3.0` only after:
+
+- Per-guild settings storage is durable (not JSON files wiped on redeploy).
+- Dashboard admin actions require verified Discord guild permissions (not just a session cookie).
+- Legacy economy block (`ledger.py`, `wallet.py`, deprecated bot commands) removed or fully migrated to ForgeLens.
 - Full local tests pass before push.
 - GitHub/Railway deployment status is green after push.
 
 ## Tagging
 
-When the release gate passes:
+When a release gate passes:
 
 ```powershell
-git tag v2.1.0
-git push origin v2.1.0
+git tag v<version>
+git push origin v<version>
 ```
 
 Do not tag a release candidate as stable until the live smoke test passes.

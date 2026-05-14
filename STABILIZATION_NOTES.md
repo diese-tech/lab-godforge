@@ -1,4 +1,6 @@
-# Stabilization Notes (v2.1.0-candidate)
+# Stabilization Notes
+
+## v2.2.0
 
 ## What changed and why
 
@@ -21,6 +23,15 @@
 - **No SQLite migration for core wallet/ledger persistence.** JSON storage remains the current production-staged persistence strategy for v2.1.0-candidate and was hardened rather than replaced.
 - **No Discord OAuth completion/migration.** Existing staged auth posture remains intact; only documentation and startup validation were improved.
 - **No payout rounding-model rewrite.** Current rounding behavior (`round`) was preserved; drift risks are acknowledged and monitored rather than changed in this bounded pass.
+
+## v2.1.0
+
+- Atomic JSON persistence for wallets and ledger via `os.replace()` temp-file swap.
+- Write serialization locks for cross-thread safety between asyncio bot and `ThreadingHTTPServer`.
+- Idempotency guards on win and prop bet resolution paths.
+- Explicit `KeyError` on missing wallet in `update_balance()`.
+- Backup files written before destructive ledger/wallet resets.
+- Fast-fail startup when `DISCORD_TOKEN` is missing.
 
 ## Remaining risks requiring runtime monitoring
 

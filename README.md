@@ -286,9 +286,10 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 - `.match`, `.bet`, `.wallet`, and `.ledger` are routed to a deprecation response in `bot.py`.
 - Draft exports include `schema_version`, `event_type`, `status`, `draft_id`, optional `forgelens_match_id`, legacy `match_id`, guild/channel context, game linkage, captains/teams, picks, bans, claims, timestamps, and draft order for ForgeLens import.
 - The reports channel map and one privileged user ID in `bot.py` are hard-coded single-tenant constants.
-- Session and draft cleanup runs every 5 minutes, but in-memory state is still lost on restart.
+- Session and draft cleanup runs every 5 minutes. In-memory session state is lost on restart; active local drafts notify their channel on restart via `data/active_local_drafts.json`.
 - Data JSON is cached by loaders; restart the bot after changing god/build/alias data.
 - Dashboard auth is transitional: temporary password and staged OAuth exist, but full guild permission enforcement is future work.
+- Dashboard POST endpoints are CSRF-protected via a double-submit cookie (`godforge_csrf` + `X-CSRF-Token` header) set at login.
 
 ## Known Issues / Refactor Targets
 
@@ -296,7 +297,7 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 - Add or finish durable per-guild storage for settings, reports channels, and custom commands.
 - Remove or migrate remaining legacy ledger/wallet internals after ForgeLens owns the replacement flows.
 - Review match ID generation and channel/server scoping before running one bot across unrelated leagues.
-- Persist or recover draft/session state if live drafts must survive restarts.
+- Persist or recover full session state across restarts (draft orphan notifications are implemented; full state recovery is not).
 - Audit Activity backend mode for retry, reconnect, and failure behavior around WebSocket draft state.
 - Tighten dashboard authorization so admin actions require verified Discord guild permissions.
 - Keep GodForge focused on match orchestration and portable draft handoff.

@@ -24,26 +24,34 @@ Included scope:
 
 ## v2.1.0 - Live Dashboard Bridge
 
-Current local work is staged as v2.1.0 candidate work. Tag `v2.1.0` after Discord OAuth and DB-backed dashboard basics are working.
-
-Included or in-progress scope:
+Released. Scope included:
 
 - Railway single-service launcher for bot plus web/API.
 - Public dashboard domain: `https://godforge-hub.up.railway.app`.
-- Planned Discord OAuth client id: `1493371999031136318`.
-- Local Discord OAuth start/callback endpoints staged for `identify guilds`.
+- Discord OAuth start/callback endpoints for `identify guilds`.
 - Temporary password-protected admin dashboard.
-- SQLite dashboard document storage staged behind `GODFORGE_STORAGE=sqlite`.
+- SQLite dashboard document storage behind `GODFORGE_STORAGE=sqlite`.
 - Match Ops, Betting, Wallets, Settings, and Admin Overview panels.
 - Manual Discord ledger sync from the dashboard.
 - Module health, managed-server selector, JSON-backed guild settings, and admin audit feed.
 - Documentation and tests for the temporary web/API bridge.
 
+## v2.2.0 - ForgeLens Handoff + Hardening
+
+Current release. Scope:
+
+- **ForgeLens draft handoff contract**: stable GodForge → ForgeLens JSON export schema with `forgelens_match_id`, `game_number`, and `draft_sequence`.
+- **GodForge as orchestration bot**: economy commands (`.match`, `.bet`, `.wallet`, `.ledger`) formally deprecated; ForgeLens owns betting, wallets, ledgers, and settlement.
+- **Env-var routing**: hardcoded owner user ID and reports channel map moved to `GODFORGE_OWNER_USER_ID` and `GODFORGE_REPORTS_CHANNELS`.
+- **Crash fix**: `options` undefined `NameError` in `_handle_draft_local()` repaired — `.draft start` in local mode was crashing on every invocation.
+- **CSRF protection**: dashboard POST endpoints now require a matching `X-CSRF-Token` header and `godforge_csrf` cookie set at login.
+- **Cleanup task supervision**: `@cleanup_task.error` handler logs and restarts the task on crash instead of silently dying.
+- **Orphan draft recovery**: active local draft channel IDs persisted to `data/active_local_drafts.json`; `on_ready()` notifies orphaned channels after a restart.
+- **Web API hardening**: request body capped at 64 KB; CORS restricted via `GODFORGE_ALLOWED_ORIGIN`; session secret warns when falling back to insecure default.
+- **Dependency pinning**: `requirements.txt` pinned to discord.py 2.7.1, python-dotenv 1.2.2, aiohttp 3.13.5.
+- **Concurrent write hardening**: ledger and wallet locks upgraded to `RLock` covering full read-modify-write cycles (deprecated code; will be removed with legacy economy block).
+
 ## Future Version Gates
 
-Substantial work after v2.0 should be tagged deliberately before deployment or release notes:
-
-- `v2.1.0`: Live admin dashboard bridge and MEE6-style management surface after OAuth and DB-backed dashboard basics are working.
-- `v2.2`: Discord OAuth, guild picker, and guild permission checks.
-- `v2.3`: Database-backed settings, wallets, ledger, and durable audit rows.
+- `v2.3`: Durable per-guild storage for settings, reports channels, and custom commands; full guild permission checks on dashboard admin actions.
 - `v3.0`: Full dual-use platform milestone with standalone web users and production-grade assets.
