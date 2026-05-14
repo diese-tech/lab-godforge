@@ -33,7 +33,7 @@ def god_slug(name: str) -> str:
     'Loki' -> 'loki', 'Da Ji' -> 'da-ji', 'Morgan Le Fay' -> 'morgan-le-fay'
     Apostrophes are stripped defensively (current Smite 2 roster has none).
     """
-    s = name.lower().replace("'", "").replace("'", "")
+    s = name.lower().replace("'", "").replace("’", "")
     s = re.sub(r"\s+", "-", s.strip())
     return s
 
@@ -72,7 +72,7 @@ def format_team(gods: list[str], role: str | None, source: str) -> discord.Embed
         role_label = role.capitalize()
 
     description = "\n".join(f"{i}. **{g}**" for i, g in enumerate(gods, 1))
-    embed = discord.Embed(title=f"🎲 {role_label} Roll5", description=description, color=color)
+    embed = discord.Embed(title=f"\U0001f3b2 {role_label} Roll5", description=description, color=color)
     embed.set_footer(text=f"{role_label} • {_command_string(role, source, prefix='roll5')}")
     return embed
 
@@ -93,7 +93,7 @@ def format_roll5_session(gods: list[str], role: str | None, source: str) -> disc
     lines = [f"{NUMBER_EMOJIS[i]} **{g}**" for i, g in enumerate(gods)]
     description = "\n".join(lines)
     embed = discord.Embed(
-        title=f"🎲 {role_label} Roll5 — Pick one!",
+        title=f"\U0001f3b2 {role_label} Roll5 — Pick one!",
         description=description,
         color=color,
     )
@@ -114,12 +114,12 @@ def format_roll5_locked(gods: list[str], selected_index: int,
     lines = []
     for i, g in enumerate(gods):
         if i == selected_index:
-            lines.append(f"🔒 **{g}** ← {user_name}")
+            lines.append(f"\U0001f512 **{g}** ← {user_name}")
         else:
             lines.append(f"~~{g}~~")
     description = "\n".join(lines)
     embed = discord.Embed(
-        title=f"🔒 {role_label} Roll5 — Locked",
+        title=f"\U0001f512 {role_label} Roll5 — Locked",
         description=description,
         color=color,
     )
@@ -151,7 +151,7 @@ def format_rg_locked(god: str, user_name: str, role: str | None, source: str) ->
         color = ROLE_COLORS[role]
         role_label = role.capitalize()
 
-    embed = discord.Embed(title=f"🔒 {god}", description=f"Selected by **{user_name}**", color=color)
+    embed = discord.Embed(title=f"\U0001f512 {god}", description=f"Selected by **{user_name}**", color=color)
     embed.set_thumbnail(url=f"{ICON_BASE}/{god_slug(god)}.png")
     embed.set_footer(text=f"{role_label} • {_command_string(role, source)}")
     return embed
@@ -168,7 +168,7 @@ def format_session_show(picks: dict) -> discord.Embed:
     """Show all picks in the current session."""
     if not picks:
         embed = discord.Embed(
-            title="📋 Session Picks",
+            title="\U0001f4cb Session Picks",
             description="No gods picked yet.",
             color=0x95A5A6,
         )
@@ -176,7 +176,7 @@ def format_session_show(picks: dict) -> discord.Embed:
 
     lines = [f"**{god}** → {info['user_name']}" for god, info in picks.items()]
     embed = discord.Embed(
-        title=f"📋 Session Picks ({len(picks)} total)",
+        title=f"\U0001f4cb Session Picks ({len(picks)} total)",
         description="\n".join(lines),
         color=0x3498DB,
     )
@@ -187,15 +187,15 @@ def format_session_end(picks: dict) -> discord.Embed:
     """Final locked summary when session ends."""
     if not picks:
         embed = discord.Embed(
-            title="📋 Session Complete",
+            title="\U0001f4cb Session Complete",
             description="No gods were picked this session.",
             color=0x95A5A6,
         )
         return embed
 
-    lines = [f"🔒 **{god}** → {info['user_name']}" for god, info in picks.items()]
+    lines = [f"\U0001f512 **{god}** → {info['user_name']}" for god, info in picks.items()]
     embed = discord.Embed(
-        title=f"📋 Session Complete — {len(picks)} picks",
+        title=f"\U0001f4cb Session Complete — {len(picks)} picks",
         description="\n".join(lines),
         color=0x2ECC71,
     )
@@ -204,12 +204,12 @@ def format_session_end(picks: dict) -> discord.Embed:
 
 def format_build(items: list[str], role: str, build_type: str | None) -> str:
     if role == "chaos":
-        header = "🎲 Chaos build"
+        header = "\U0001f3b2 Chaos build"
     elif role == "support":
-        header = "🛡️ Support build"
+        header = "\U0001f6e1️ Support build"
     elif role == "adc":
         type_labels = {"standard": "standard", "str": "strength", "hyb": "hybrid"}
-        header = f"🏹 ADC build ({type_labels.get(build_type, build_type)})"
+        header = f"\U0001f3f9 ADC build ({type_labels.get(build_type, build_type)})"
     else:
         type_labels = {"int": "intelligence", "str": "strength", "hyb": "hybrid"}
         header = f"⚔️ {role.capitalize()} build ({type_labels.get(build_type, build_type)})"
@@ -330,32 +330,32 @@ def format_draft_board(draft) -> discord.Embed:
     if turn:
         team, action = turn
         captain = draft.blue_captain["name"] if team == "blue" else draft.red_captain["name"]
-        team_emoji = "🔵" if team == "blue" else "🔴"
+        team_emoji = "\U0001f535" if team == "blue" else "\U0001f534"
         status = f"{team_emoji} **{captain}** — {action}"
     else:
         status = "✅ Game complete! Use `.draft next` or `.draft end`"
 
-    title = f"📋 Draft {draft.draft_id} — Game {game.game_number} — {phase}"
+    title = f"\U0001f4cb Draft {draft.draft_id} — Game {game.game_number} — {phase}"
     embed = discord.Embed(title=title, color=DRAFT_COLOR)
 
     # Bans - side by side
     blue_bans = _pad_list(game.bans["blue"], 5)
     red_bans = _pad_list(game.bans["red"], 5)
-    embed.add_field(name="🔵 Blue Bans", value="\n".join(blue_bans), inline=True)
-    embed.add_field(name="\u2800", value="\u2800", inline=True)  # spacer
-    embed.add_field(name="🔴 Red Bans", value="\n".join(red_bans), inline=True)
+    embed.add_field(name="\U0001f535 Blue Bans", value="\n".join(blue_bans), inline=True)
+    embed.add_field(name="⠀", value="⠀", inline=True)  # spacer
+    embed.add_field(name="\U0001f534 Red Bans", value="\n".join(red_bans), inline=True)
 
     # Picks - side by side
     blue_picks = _pad_list(game.picks["blue"], 5)
     red_picks = _pad_list(game.picks["red"], 5)
-    embed.add_field(name="🔵 Blue Picks", value="\n".join(blue_picks), inline=True)
-    embed.add_field(name="\u2800", value="\u2800", inline=True)  # spacer
-    embed.add_field(name="🔴 Red Picks", value="\n".join(red_picks), inline=True)
+    embed.add_field(name="\U0001f535 Blue Picks", value="\n".join(blue_picks), inline=True)
+    embed.add_field(name="⠀", value="⠀", inline=True)  # spacer
+    embed.add_field(name="\U0001f534 Red Picks", value="\n".join(red_picks), inline=True)
 
     # Fearless pool
     if draft.fearless_pool:
         fearless = ", ".join(sorted(draft.fearless_pool))
-        embed.add_field(name="🚫 Fearless Pool", value=fearless, inline=False)
+        embed.add_field(name="\U0001f6ab Fearless Pool", value=fearless, inline=False)
 
     _add_forgelens_status_field(
         embed,
@@ -366,21 +366,21 @@ def format_draft_board(draft) -> discord.Embed:
         getattr(draft, "draft_sequence", 1),
     )
     embed.add_field(name="⏳ Current Turn", value=status, inline=False)
-    embed.set_footer(text=f"GodForge v1.6 • Draft {draft.draft_id}")
+    embed.set_footer(text=f"GodForge v{GODFORGE_VERSION} • Draft {draft.draft_id}")
     return embed
 
 
 def format_draft_show(draft) -> discord.Embed:
     """Full history embed — all games + fearless pool."""
     embed = discord.Embed(
-        title=f"📋 Draft {draft.draft_id} — Full History",
+        title=f"\U0001f4cb Draft {draft.draft_id} — Full History",
         color=DRAFT_COLOR,
     )
 
     # Captains
     embed.add_field(
         name="Captains",
-        value=f"🔵 {draft.blue_captain['name']}  vs  🔴 {draft.red_captain['name']}",
+        value=f"\U0001f535 {draft.blue_captain['name']}  vs  \U0001f534 {draft.red_captain['name']}",
         inline=False,
     )
 
@@ -393,10 +393,10 @@ def format_draft_show(draft) -> discord.Embed:
         embed.add_field(
             name=f"Game {game.game_number}",
             value=(
-                f"🔵 Picks: {blue_picks}\n"
-                f"🔴 Picks: {red_picks}\n"
-                f"🔵 Bans: {blue_bans}\n"
-                f"🔴 Bans: {red_bans}"
+                f"\U0001f535 Picks: {blue_picks}\n"
+                f"\U0001f534 Picks: {red_picks}\n"
+                f"\U0001f535 Bans: {blue_bans}\n"
+                f"\U0001f534 Bans: {red_bans}"
             ),
             inline=False,
         )
@@ -408,14 +408,14 @@ def format_draft_show(draft) -> discord.Embed:
         red_picks = ", ".join(cg.picks["red"]) or "None"
         blue_bans = ", ".join(cg.bans["blue"]) or "None"
         red_bans = ", ".join(cg.bans["red"]) or "None"
-        status = "✅ Complete" if cg.is_complete() else "🔄 In Progress"
+        status = "✅ Complete" if cg.is_complete() else "\U0001f504 In Progress"
         embed.add_field(
             name=f"Game {cg.game_number} ({status})",
             value=(
-                f"🔵 Picks: {blue_picks}\n"
-                f"🔴 Picks: {red_picks}\n"
-                f"🔵 Bans: {blue_bans}\n"
-                f"🔴 Bans: {red_bans}"
+                f"\U0001f535 Picks: {blue_picks}\n"
+                f"\U0001f534 Picks: {red_picks}\n"
+                f"\U0001f535 Bans: {blue_bans}\n"
+                f"\U0001f534 Bans: {red_bans}"
             ),
             inline=False,
         )
@@ -425,7 +425,7 @@ def format_draft_show(draft) -> discord.Embed:
         fearless = ", ".join(sorted(draft.fearless_pool))
     else:
         fearless = "None yet"
-    embed.add_field(name="🚫 Fearless Pool", value=fearless, inline=False)
+    embed.add_field(name="\U0001f6ab Fearless Pool", value=fearless, inline=False)
     _add_forgelens_status_field(
         embed,
         draft.current_status(),
@@ -434,28 +434,20 @@ def format_draft_show(draft) -> discord.Embed:
         draft.current_game.game_number,
         getattr(draft, "draft_sequence", 1),
     )
-    _add_forgelens_status_field(
-        embed,
-        export.get("status", getattr(draft, "current_status", lambda: "draft_complete")()),
-        export.get("draft_id", draft.draft_id),
-        export.get("forgelens_match_id", ""),
-        export.get("game_number", draft.current_game.game_number),
-        export.get("draft_sequence", getattr(draft, "draft_sequence", 1)),
-    )
-    embed.set_footer(text=f"GodForge v1.6 • Draft {draft.draft_id}")
+    embed.set_footer(text=f"GodForge v{GODFORGE_VERSION} • Draft {draft.draft_id}")
     return embed
 
 
 def format_draft_end(draft, export: dict) -> discord.Embed:
     """Final summary when draft set ends."""
     embed = discord.Embed(
-        title=f"🏁 Draft {draft.draft_id} — Complete",
+        title=f"\U0001f3c1 Draft {draft.draft_id} — Complete",
         color=0x2ECC71,
     )
 
     embed.add_field(
         name="Captains",
-        value=f"🔵 {draft.blue_captain['name']}  vs  🔴 {draft.red_captain['name']}",
+        value=f"\U0001f535 {draft.blue_captain['name']}  vs  \U0001f534 {draft.red_captain['name']}",
         inline=False,
     )
 
@@ -471,32 +463,32 @@ def format_draft_end(draft, export: dict) -> discord.Embed:
         embed.add_field(
             name=f"Game {game_data['game_number']} {status}",
             value=(
-                f"🔵 Picks: {blue_picks}\n"
-                f"🔴 Picks: {red_picks}\n"
-                f"🔵 Bans: {blue_bans}\n"
-                f"🔴 Bans: {red_bans}"
+                f"\U0001f535 Picks: {blue_picks}\n"
+                f"\U0001f534 Picks: {red_picks}\n"
+                f"\U0001f535 Bans: {blue_bans}\n"
+                f"\U0001f534 Bans: {red_bans}"
             ),
             inline=False,
         )
 
     if export["fearless_pool"]:
         fearless = ", ".join(export["fearless_pool"])
-        embed.add_field(name="🚫 Fearless Pool", value=fearless, inline=False)
+        embed.add_field(name="\U0001f6ab Fearless Pool", value=fearless, inline=False)
 
-    embed.set_footer(text=f"GodForge v1.6 • Draft {draft.draft_id}")
+    embed.set_footer(text=f"GodForge v{GODFORGE_VERSION} • Draft {draft.draft_id}")
     return embed
 
 
 def format_draft_action(team: str, action_type: str, god: str, draft_id: str) -> str:
     """Short confirmation message after a ban or pick."""
-    emoji = "🔵" if team == "blue" else "🔴"
+    emoji = "\U0001f535" if team == "blue" else "\U0001f534"
     action_word = "banned" if action_type == "ban" else "picked"
     return f"{emoji} **{god}** {action_word} • {draft_id}"
 
 
 def format_draft_undo(team: str, action_type: str, god: str) -> str:
     """Confirmation of an undo."""
-    emoji = "🔵" if team == "blue" else "🔴"
+    emoji = "\U0001f535" if team == "blue" else "\U0001f534"
     action_word = "ban" if action_type == "ban" else "pick"
     return f"↩️ Undid {emoji} {action_word} of **{god}**"
 
@@ -507,7 +499,7 @@ def format_draft_next(draft) -> str:
     return (
         f"✅ Game {draft.current_game.game_number - 1} locked! "
         f"Starting **Game {draft.current_game.game_number}**.\n"
-        f"🚫 Fearless pool: {fearless}"
+        f"\U0001f6ab Fearless pool: {fearless}"
     )
 
 
@@ -519,7 +511,7 @@ def format_claim_embed(team: str, picks: list[str], claims: dict,
     claims dict: god_name -> {"user_id": ..., "name": ..., ...} or missing if unclaimed.
     """
     color = 0x3498DB if team == "blue" else 0xE74C3C
-    team_label = "🔵 Blue" if team == "blue" else "🔴 Red"
+    team_label = "\U0001f535 Blue" if team == "blue" else "\U0001f534 Red"
 
     lines = []
     all_claimed = True
@@ -546,17 +538,17 @@ def format_claim_embed(team: str, picks: list[str], claims: dict,
         game_number,
         draft_sequence,
     )
-    embed.set_footer(text=f"GodForge v1.6 • Draft {draft_id} • React to claim")
+    embed.set_footer(text=f"GodForge v{GODFORGE_VERSION} • Draft {draft_id} • React to claim")
     return embed
 
 
 def format_claim_undo(team: str, god: str, user_name: str) -> str:
     """Confirmation of a claim undo."""
-    emoji = "🔵" if team == "blue" else "🔴"
+    emoji = "\U0001f535" if team == "blue" else "\U0001f534"
     return f"↩️ Undid {emoji} claim: **{user_name}** unclaimed **{god}**"
 
 
-# ── Activity backend snapshot formatters ──────────────────────────────────────
+# ── Activity backend snapshot formatters ────────────────────────────────────────────────────────────────────────────────
 
 def format_board_from_snapshot(snapshot: dict) -> discord.Embed:
     """Living embed built from an Activity StateSnapshot dict."""
@@ -571,31 +563,31 @@ def format_board_from_snapshot(snapshot: dict) -> discord.Embed:
         team = turn.get("team", "blue")
         action = turn.get("action", "")
         captain_name = blue_captain if team == "blue" else red_captain
-        team_emoji = "🔵" if team == "blue" else "🔴"
+        team_emoji = "\U0001f535" if team == "blue" else "\U0001f534"
         status = f"{team_emoji} **{captain_name}** — {action}"
     else:
         status = "✅ Game complete!"
 
-    title = f"📋 Draft {draft_id} — Game {game_number} — {phase}"
+    title = f"\U0001f4cb Draft {draft_id} — Game {game_number} — {phase}"
     embed = discord.Embed(title=title, color=DRAFT_COLOR)
 
     bans = snapshot.get("bans", {"blue": [], "red": []})
     picks = snapshot.get("picks", {"blue": [], "red": []})
     blue_bans = _pad_list(bans.get("blue", []), 5)
     red_bans = _pad_list(bans.get("red", []), 5)
-    embed.add_field(name="🔵 Blue Bans", value="\n".join(blue_bans), inline=True)
+    embed.add_field(name="\U0001f535 Blue Bans", value="\n".join(blue_bans), inline=True)
     embed.add_field(name="⠀", value="⠀", inline=True)
-    embed.add_field(name="🔴 Red Bans", value="\n".join(red_bans), inline=True)
+    embed.add_field(name="\U0001f534 Red Bans", value="\n".join(red_bans), inline=True)
 
     blue_picks = _pad_list(picks.get("blue", []), 5)
     red_picks = _pad_list(picks.get("red", []), 5)
-    embed.add_field(name="🔵 Blue Picks", value="\n".join(blue_picks), inline=True)
+    embed.add_field(name="\U0001f535 Blue Picks", value="\n".join(blue_picks), inline=True)
     embed.add_field(name="⠀", value="⠀", inline=True)
-    embed.add_field(name="🔴 Red Picks", value="\n".join(red_picks), inline=True)
+    embed.add_field(name="\U0001f534 Red Picks", value="\n".join(red_picks), inline=True)
 
     fearless_pool = snapshot.get("fearlessPool", [])
     if fearless_pool:
-        embed.add_field(name="🚫 Fearless Pool", value=", ".join(fearless_pool), inline=False)
+        embed.add_field(name="\U0001f6ab Fearless Pool", value=", ".join(fearless_pool), inline=False)
 
     _add_forgelens_status_field(
         embed,
@@ -606,7 +598,7 @@ def format_board_from_snapshot(snapshot: dict) -> discord.Embed:
         snapshot.get("draftSequence", 1),
     )
     embed.add_field(name="⏳ Current Turn", value=status, inline=False)
-    embed.set_footer(text=f"GodForge v1.6 • Draft {draft_id}")
+    embed.set_footer(text=f"GodForge v{GODFORGE_VERSION} • Draft {draft_id}")
     return embed
 
 
@@ -617,12 +609,12 @@ def format_draft_end_from_export(export: dict) -> discord.Embed:
     red_captain = export.get("redCaptain", export.get("red_captain", {})).get("name", "Red")
 
     embed = discord.Embed(
-        title=f"🏁 Draft {draft_id} — Complete",
+        title=f"\U0001f3c1 Draft {draft_id} — Complete",
         color=0x2ECC71,
     )
     embed.add_field(
         name="Captains",
-        value=f"🔵 {blue_captain} vs 🔴 {red_captain}",
+        value=f"\U0001f535 {blue_captain} vs \U0001f534 {red_captain}",
         inline=False,
     )
 
@@ -637,17 +629,17 @@ def format_draft_end_from_export(export: dict) -> discord.Embed:
         embed.add_field(
             name=f"Game {game_data['game_number']} {status}",
             value=(
-                f"🔵 Picks: {bp}\n"
-                f"🔴 Picks: {rp}\n"
-                f"🔵 Bans: {bb}\n"
-                f"🔴 Bans: {rb}"
+                f"\U0001f535 Picks: {bp}\n"
+                f"\U0001f534 Picks: {rp}\n"
+                f"\U0001f535 Bans: {bb}\n"
+                f"\U0001f534 Bans: {rb}"
             ),
             inline=False,
         )
 
     fearless_pool = export.get("fearlessPool", [])
     if fearless_pool:
-        embed.add_field(name="🚫 Fearless Pool", value=", ".join(fearless_pool), inline=False)
+        embed.add_field(name="\U0001f6ab Fearless Pool", value=", ".join(fearless_pool), inline=False)
 
     _add_forgelens_status_field(
         embed,
@@ -657,5 +649,5 @@ def format_draft_end_from_export(export: dict) -> discord.Embed:
         export.get("gameNumber", export.get("game_number", 1)),
         export.get("draftSequence", export.get("draft_sequence", 1)),
     )
-    embed.set_footer(text=f"GodForge v1.6 • Draft {draft_id}")
+    embed.set_footer(text=f"GodForge v{GODFORGE_VERSION} • Draft {draft_id}")
     return embed
