@@ -63,6 +63,45 @@ def test_draft_export_contains_forgelens_handoff_context(tmp_path, monkeypatch):
     assert "stats" not in export["games"][0]["claims"]["blue"]["Bellona"]
 
 
+def test_fearless_draft_uses_exact_twenty_step_phased_sequence(tmp_path, monkeypatch):
+    draft = _make_draft(tmp_path, monkeypatch)
+    expected_sequence = [
+        ("blue", "ban", "Bans 1"), ("red", "ban", "Bans 1"), ("blue", "ban", "Bans 1"),
+        ("red", "ban", "Bans 1"), ("blue", "ban", "Bans 1"), ("red", "ban", "Bans 1"),
+        ("blue", "pick", "Picks 1"), ("red", "pick", "Picks 1"), ("red", "pick", "Picks 1"),
+        ("blue", "pick", "Picks 1"), ("blue", "pick", "Picks 1"), ("red", "pick", "Picks 1"),
+        ("red", "ban", "Bans 2"), ("blue", "ban", "Bans 2"), ("red", "ban", "Bans 2"),
+        ("blue", "ban", "Bans 2"),
+        ("red", "pick", "Picks 2"), ("blue", "pick", "Picks 2"), ("blue", "pick", "Picks 2"),
+        ("red", "pick", "Picks 2"),
+    ]
+
+    exported_order = [
+        (step["team"], step["action"], step["phase"])
+        for step in draft.to_export_dict()["draft_order"]
+    ]
+
+    assert draft_utils.STEPS_PER_GAME == 20
+    assert exported_order == expected_sequence
+
+    for index, (expected_team, expected_action, expected_phase) in enumerate(expected_sequence):
+        assert draft_utils.get_phase_label(draft.current_game.step) == expected_phase
+        assert draft.get_current_team_and_action() == (expected_team, expected_action)
+
+        team, action = draft.execute_step(f"God {index + 1}")
+        assert (team, action) == (expected_team, expected_action)
+        assert draft.current_game.is_complete() is (index == 19)
+
+    assert draft.get_current_team_and_action() is None
+    assert draft_utils.get_phase_label(draft.current_game.step) == "Complete"
+    assert len(draft.current_game.bans["blue"]) == 5
+    assert len(draft.current_game.bans["red"]) == 5
+    assert len(draft.current_game.picks["blue"]) == 5
+    assert len(draft.current_game.picks["red"]) == 5
+    assert sum(len(gods) for gods in draft.current_game.bans.values()) == 10
+    assert sum(len(gods) for gods in draft.current_game.picks.values()) == 10
+
+
 def test_draft_complete_status_only_after_claims(tmp_path, monkeypatch):
     draft = _make_draft(tmp_path, monkeypatch)
 
