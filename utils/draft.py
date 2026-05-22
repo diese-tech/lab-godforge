@@ -18,10 +18,10 @@ DRAFT_EXPORT_SCHEMA_VERSION = 2
 TURN_SEQUENCE = [
     ("blue", "ban"), ("red", "ban"), ("blue", "ban"),
     ("red", "ban"), ("blue", "ban"), ("red", "ban"),
-    ("red", "pick"), ("blue", "pick"), ("blue", "pick"),
-    ("red", "pick"), ("red", "pick"), ("blue", "pick"),
+    ("blue", "pick"), ("red", "pick"), ("red", "pick"),
+    ("blue", "pick"), ("blue", "pick"), ("red", "pick"),
     ("red", "ban"), ("blue", "ban"), ("red", "ban"), ("blue", "ban"),
-    ("blue", "pick"), ("red", "pick"), ("red", "pick"), ("blue", "pick"),
+    ("red", "pick"), ("blue", "pick"), ("blue", "pick"), ("red", "pick"),
 ]
 
 STEPS_PER_GAME = len(TURN_SEQUENCE)
