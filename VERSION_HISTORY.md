@@ -79,6 +79,10 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
 - **Reliable ready rosters**: concurrency-safe capacity, durable waitlists,
   role-aware substitute promotion, bounded ready-check extensions, and timeout
   cancellation survive process restarts.
+- **Ready-to-draft handoff**: organizers launch the existing local or
+  Activity-backed fearless draft from a ready lobby without re-entering
+  captains, participants, roles, or rules; durable launch intents make retries
+  safe and failures recoverable.
 
 ## Future Version Gates
 
