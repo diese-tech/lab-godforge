@@ -336,9 +336,16 @@ class MatchResultView(discord.ui.View):
 class MatchContinuityView(discord.ui.View):
     """Persistent organizer controls attached after a confirmed match."""
 
-    def __init__(self, handler: LobbyActionHandler) -> None:
+    def __init__(
+        self,
+        handler: LobbyActionHandler,
+        *,
+        allow_continue_series: bool = True,
+    ) -> None:
         super().__init__(timeout=None)
         for action, label, style in MATCH_CONTINUITY_ACTIONS:
+            if action == "continue_series" and not allow_continue_series:
+                continue
             self.add_item(
                 _LobbyActionButton(
                     action,

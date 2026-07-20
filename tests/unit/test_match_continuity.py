@@ -14,6 +14,7 @@ from utils.match_history import (
     MatchPlayer,
     MatchRecord,
     MatchTeam,
+    SeriesScore,
 )
 from utils.party_queue import (
     InMemoryPartyQueueRepository,
@@ -165,3 +166,122 @@ def test_continuity_controls_are_persistent_and_stably_addressed():
         item.custom_id.startswith("godforge:match:continuity:")
         for item in view.children
     )
+
+
+@pytest.mark.asyncio
+async def test_retry_replays_failed_queue_projection(tmp_path, monkeypatch):
+    continuity, queue = await service(tmp_path)
+    original = queue.reset_roster
+    calls = 0
+
+    async def flaky(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("queue unavailable")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(queue, "reset_roster", flaky)
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        await continuity.continue_match(
+            completed_match(), lobby_id="lobby-1",
+            action="run_it_back", operation_id="queue-fail",
+        )
+    reserved = continuity.repository.get(77, "GF-1")
+    assert not reserved.queue_projected
+    retried = await continuity.continue_match(
+        completed_match(), lobby_id="lobby-1",
+        action="run_it_back", operation_id="queue-retry",
+    )
+    assert retried.queue_projected
+    assert retried.rooms_projected
+    assert retried.draft_projected
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_replays_failed_room_projection_without_repeating_queue(tmp_path):
+    calls = 0
+
+    async def flaky_rooms(_lobby_id, _participant_ids):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("discord unavailable")
+        return True
+
+    continuity, queue = await service(tmp_path, room_reconciler=flaky_rooms)
+    queue.reset_roster = AsyncMock(wraps=queue.reset_roster)
+    with pytest.raises(RuntimeError, match="discord unavailable"):
+        await continuity.continue_match(
+            completed_match(), lobby_id="lobby-1",
+            action="run_it_back", operation_id="room-fail",
+        )
+    reserved = continuity.repository.get(77, "GF-1")
+    assert reserved.queue_projected and not reserved.rooms_projected
+    retried = await continuity.continue_match(
+        completed_match(), lobby_id="lobby-1",
+        action="run_it_back", operation_id="room-retry",
+    )
+    assert retried.reused_rooms and retried.draft_projected
+    assert queue.reset_roster.await_count == 1
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_retry_replays_failed_history_draft_projection_only(tmp_path):
+    draft = AsyncMock(side_effect=[RuntimeError("history unavailable"), None])
+    rooms = AsyncMock(return_value=True)
+    continuity, queue = await service(
+        tmp_path, room_reconciler=rooms, draft_starter=draft
+    )
+    queue.reset_roster = AsyncMock(wraps=queue.reset_roster)
+    with pytest.raises(RuntimeError, match="history unavailable"):
+        await continuity.continue_match(
+            completed_match(), lobby_id="lobby-1",
+            action="run_it_back", operation_id="draft-fail",
+        )
+    reserved = continuity.repository.get(77, "GF-1")
+    assert reserved.queue_projected and reserved.rooms_projected
+    assert not reserved.draft_projected
+    retried = await continuity.continue_match(
+        completed_match(), lobby_id="lobby-1",
+        action="run_it_back", operation_id="draft-retry",
+    )
+    assert retried.draft_projected
+    assert queue.reset_roster.await_count == 1
+    rooms.assert_awaited_once()
+    assert draft.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_continue_series_requires_series_context(tmp_path):
+    continuity, _ = await service(tmp_path)
+    with pytest.raises(ContinuityError, match="existing series score"):
+        await continuity.continue_match(
+            completed_match(), lobby_id="lobby-1",
+            action="continue_series", operation_id="not-series",
+        )
+
+    original = completed_match()
+    series = MatchRecord(
+        original.match_id, original.guild_id, original.organizer_id,
+        original.team_one, original.team_two,
+        outcome=original.outcome, series_score=SeriesScore(2, 1),
+    )
+    result = await continuity.continue_match(
+        series, lobby_id="lobby-1",
+        action="continue_series", operation_id="series",
+    )
+    assert result.status is ContinuityStatus.READY
+
+
+def test_series_control_can_be_omitted_from_specific_result_card():
+    async def handler(_interaction, _action):
+        pass
+
+    specific = MatchContinuityView(handler, allow_continue_series=False)
+    assert "Continue Series" not in [item.label for item in specific.children]
+    # Startup registers the full persistent routing table.
+    persistent_router = MatchContinuityView(handler)
+    assert "Continue Series" in [item.label for item in persistent_router.children]

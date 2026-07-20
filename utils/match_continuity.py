@@ -52,6 +52,9 @@ class ContinuityResult:
     changes: tuple[AssignmentChange, ...]
     promoted_ids: tuple[int, ...] = ()
     reused_rooms: bool = False
+    queue_projected: bool = False
+    rooms_projected: bool = False
+    draft_projected: bool = False
 
 
 class ContinuityError(ValueError):
@@ -84,6 +87,9 @@ class MatchContinuityRepository:
                   changes_json TEXT NOT NULL,
                   promoted_ids_json TEXT NOT NULL,
                   reused_rooms INTEGER NOT NULL DEFAULT 0,
+                  queue_projected INTEGER NOT NULL DEFAULT 0,
+                  rooms_projected INTEGER NOT NULL DEFAULT 0,
+                  draft_projected INTEGER NOT NULL DEFAULT 0,
                   operation_id TEXT NOT NULL,
                   PRIMARY KEY(guild_id, source_match_id),
                   UNIQUE(operation_id),
@@ -91,6 +97,17 @@ class MatchContinuityRepository:
                 );
                 """
             )
+            columns = {
+                row["name"] for row in conn.execute(
+                    "PRAGMA table_info(match_continuity)"
+                ).fetchall()
+            }
+            for name in ("queue_projected", "rooms_projected", "draft_projected"):
+                if name not in columns:
+                    conn.execute(
+                        f"ALTER TABLE match_continuity ADD COLUMN {name} "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
 
     def _connect(self):
         conn = sqlite3.connect(self.path, timeout=30)
@@ -135,26 +152,41 @@ class MatchContinuityRepository:
                 """INSERT INTO match_continuity
                    (guild_id,source_match_id,lobby_id,action,status,next_match_id,
                     team_one_json,team_two_json,changes_json,promoted_ids_json,
-                    reused_rooms,operation_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    reused_rooms,queue_projected,rooms_projected,draft_projected,
+                    operation_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     guild_id, result.source_match_id, result.lobby_id,
                     result.action, result.status, result.next_match_id,
                     _team_json(result.team_one), _team_json(result.team_two),
                     json.dumps([asdict(change) for change in result.changes]),
-                    json.dumps(result.promoted_ids), int(result.reused_rooms), operation_id,
+                    json.dumps(result.promoted_ids), int(result.reused_rooms),
+                    int(result.queue_projected), int(result.rooms_projected),
+                    int(result.draft_projected), operation_id,
                 ),
             )
             return result, True
 
-    def update_projection(
-        self, guild_id: int, source_match_id: str, *, reused_rooms: bool
+    def mark_projection(
+        self,
+        guild_id: int,
+        source_match_id: str,
+        stage: str,
+        *,
+        reused_rooms: bool | None = None,
     ) -> ContinuityResult:
+        if stage not in {"queue", "rooms", "draft"}:
+            raise ValueError("unknown continuity projection stage")
+        assignments = [f"{stage}_projected=1"]
+        params: list[object] = []
+        if reused_rooms is not None:
+            assignments.append("reused_rooms=?")
+            params.append(int(reused_rooms))
         with self.transaction() as conn:
             conn.execute(
-                "UPDATE match_continuity SET reused_rooms=? "
+                f"UPDATE match_continuity SET {','.join(assignments)} "
                 "WHERE guild_id=? AND source_match_id=?",
-                (int(reused_rooms), guild_id, source_match_id),
+                (*params, guild_id, source_match_id),
             )
             row = conn.execute(
                 "SELECT * FROM match_continuity WHERE guild_id=? AND source_match_id=?",
@@ -195,7 +227,7 @@ class MatchContinuityService:
                 raise ContinuityError(
                     f"{prior.action.value.replace('_', ' ')} already selected"
                 )
-            return prior
+            return await self._project(record.guild_id, prior)
 
         queue = await self.queue_service.get(lobby_id)
         if queue is None:
@@ -230,6 +262,13 @@ class MatchContinuityService:
                 tuple(promoted),
             )
         else:
+            if (
+                action is ContinuityAction.CONTINUE_SERIES
+                and not _has_series_context(record)
+            ):
+                raise ContinuityError(
+                    "Continue Series requires an existing series score or series marker."
+                )
             team_one, team_two = _teams(record, roster, shuffle=(
                 action is ContinuityAction.SHUFFLE_TEAMS
             ))
@@ -247,27 +286,54 @@ class MatchContinuityService:
             record.guild_id, result, operation_id
         )
         if not created:
-            return result
-        if result.status is ContinuityStatus.QUEUED:
-            await self.queue_service.reset_roster(lobby_id)
-        elif result.status is ContinuityStatus.READY:
-            for user_id in departures:
-                await self.queue_service.leave(lobby_id, user_id)
-            await self.queue_service.reset_roster(
-                lobby_id,
-                tuple(
+            return await self._project(record.guild_id, result)
+        return await self._project(record.guild_id, result)
+
+    async def _project(
+        self, guild_id: int, result: ContinuityResult
+    ) -> ContinuityResult:
+        """Replay every missing projection; each checkpoint is durable."""
+        if not result.queue_projected:
+            if result.status is ContinuityStatus.QUEUED:
+                await self.queue_service.reset_roster(result.lobby_id)
+            elif result.status is ContinuityStatus.READY:
+                departing_ids = tuple(
+                    change.user_id
+                    for change in result.changes
+                    if change.previous_team is not None and change.next_team is None
+                )
+                for user_id in departing_ids:
+                    await self.queue_service.leave(result.lobby_id, user_id)
+                active_ids = tuple(
                     player.user_id
                     for player in (*result.team_one.players, *result.team_two.players)
-                ),
+                )
+                await self.queue_service.reset_roster(result.lobby_id, active_ids)
+            result = self.repository.mark_projection(
+                guild_id, result.source_match_id, "queue"
             )
-        if self.room_reconciler and result.status is ContinuityStatus.READY:
-            ids = tuple(player.user_id for player in (*result.team_one.players, *result.team_two.players))
-            reused = await self.room_reconciler(lobby_id, ids)
-            result = self.repository.update_projection(
-                record.guild_id, record.match_id, reused_rooms=reused
+
+        if not result.rooms_projected:
+            reused = False
+            if self.room_reconciler and result.status is ContinuityStatus.READY:
+                ids = tuple(
+                    player.user_id
+                    for player in (*result.team_one.players, *result.team_two.players)
+                )
+                reused = await self.room_reconciler(result.lobby_id, ids)
+            result = self.repository.mark_projection(
+                guild_id,
+                result.source_match_id,
+                "rooms",
+                reused_rooms=reused,
             )
-        if self.draft_starter and result.status is ContinuityStatus.READY:
-            await self.draft_starter(result)
+
+        if not result.draft_projected:
+            if self.draft_starter and result.status is ContinuityStatus.READY:
+                await self.draft_starter(result)
+            result = self.repository.mark_projection(
+                guild_id, result.source_match_id, "draft"
+            )
         return result
 
 
@@ -361,6 +427,11 @@ def _preferred_role(member: QueueMember, departed: MatchPlayer | None) -> str:
     )
 
 
+def _has_series_context(record: MatchRecord) -> bool:
+    reference = (record.draft_reference or "").strip().lower()
+    return record.series_score is not None or reference.startswith("series:")
+
+
 def _team_json(team):
     if team is None:
         return None
@@ -387,4 +458,6 @@ def _decode(row):
         _decode_team(row["team_one_json"]), _decode_team(row["team_two_json"]),
         tuple(AssignmentChange(**item) for item in json.loads(row["changes_json"])),
         tuple(json.loads(row["promoted_ids_json"])), bool(row["reused_rooms"]),
+        bool(row["queue_projected"]), bool(row["rooms_projected"]),
+        bool(row["draft_projected"]),
     )

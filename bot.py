@@ -3227,14 +3227,21 @@ async def _handle_match_result_action(
     await interaction.response.edit_message(
         embed=_match_result_embed(changed),
         view=(
-            MatchContinuityView(_handle_match_continuity_action)
-            if changed.outcome in {
-                MatchOutcome.TEAM_ONE,
-                MatchOutcome.TEAM_TWO,
-                MatchOutcome.CANCELLED,
-                MatchOutcome.NO_CONTEST,
-            }
-            else MatchResultView(_handle_match_result_action)
+            MatchContinuityView(
+                _handle_match_continuity_action,
+                allow_continue_series=(
+                    changed.series_score is not None
+                    or (changed.draft_reference or "").lower().startswith("series:")
+                ),
+            )
+            if changed.outcome in {MatchOutcome.TEAM_ONE, MatchOutcome.TEAM_TWO}
+            else (
+                None
+                if changed.outcome in {
+                    MatchOutcome.CANCELLED, MatchOutcome.NO_CONTEST
+                }
+                else MatchResultView(_handle_match_result_action)
+            )
         ),
     )
 
