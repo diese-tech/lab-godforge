@@ -164,8 +164,8 @@ class MatchHistoryRepository:
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS godforge_matches (
-              match_id TEXT PRIMARY KEY,
               guild_id INTEGER NOT NULL,
+              match_id TEXT NOT NULL,
               organizer_id INTEGER NOT NULL,
               team_one_json TEXT NOT NULL,
               team_two_json TEXT NOT NULL,
@@ -175,16 +175,20 @@ class MatchHistoryRepository:
               score_two INTEGER,
               created_at TEXT NOT NULL,
               updated_at TEXT NOT NULL,
-              resolved_by INTEGER
+              resolved_by INTEGER,
+              PRIMARY KEY(guild_id, match_id)
             );
             CREATE INDEX IF NOT EXISTS godforge_matches_guild_recent
               ON godforge_matches(guild_id, created_at DESC);
             CREATE TABLE IF NOT EXISTS godforge_result_confirmations (
-              match_id TEXT NOT NULL REFERENCES godforge_matches(match_id) ON DELETE CASCADE,
+              guild_id INTEGER NOT NULL,
+              match_id TEXT NOT NULL,
               captain_id INTEGER NOT NULL,
               reported_outcome TEXT NOT NULL,
               reported_at TEXT NOT NULL,
-              PRIMARY KEY(match_id, captain_id)
+              PRIMARY KEY(guild_id, match_id, captain_id),
+              FOREIGN KEY(guild_id, match_id)
+                REFERENCES godforge_matches(guild_id, match_id) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS godforge_history_operations (
               operation_id TEXT PRIMARY KEY,
@@ -262,17 +266,17 @@ class MatchHistoryRepository:
             now = at or utc_now()
             conn.execute(
                 """INSERT INTO godforge_result_confirmations
-                   (match_id,captain_id,reported_outcome,reported_at)
-                   VALUES (?,?,?,?)
-                   ON CONFLICT(match_id,captain_id) DO UPDATE SET
+                   (guild_id,match_id,captain_id,reported_outcome,reported_at)
+                   VALUES (?,?,?,?,?)
+                   ON CONFLICT(guild_id,match_id,captain_id) DO UPDATE SET
                      reported_outcome=excluded.reported_outcome,
                      reported_at=excluded.reported_at""",
-                (match_id, captain_id, winner, _time(now)),
+                (guild_id, match_id, captain_id, winner, _time(now)),
             )
             reports = conn.execute(
                 "SELECT reported_outcome FROM godforge_result_confirmations "
-                "WHERE match_id=? ORDER BY captain_id",
-                (match_id,),
+                "WHERE guild_id=? AND match_id=? ORDER BY captain_id",
+                (guild_id, match_id),
             ).fetchall()
             outcome = MatchOutcome.PENDING
             if len(reports) == 2:
@@ -284,8 +288,8 @@ class MatchHistoryRepository:
                 self._validate_score(outcome, score)
             conn.execute(
                 """UPDATE godforge_matches SET outcome=?,score_one=?,score_two=?,
-                   updated_at=? WHERE match_id=?""",
-                (outcome, *score_values, _time(now), match_id),
+                   updated_at=? WHERE guild_id=? AND match_id=?""",
+                (outcome, *score_values, _time(now), guild_id, match_id),
             )
             self._save_operation(conn, operation_id, fingerprint, match_id, now)
             return self._require(conn, match_id, guild_id)
@@ -321,11 +325,11 @@ class MatchHistoryRepository:
             now = at or utc_now()
             conn.execute(
                 """UPDATE godforge_matches SET outcome=?,score_one=?,score_two=?,
-                   updated_at=?,resolved_by=? WHERE match_id=?""",
+                   updated_at=?,resolved_by=? WHERE guild_id=? AND match_id=?""",
                 (
                     outcome, score.team_one if score else None,
                     score.team_two if score else None, _time(now), organizer_id,
-                    match_id,
+                    guild_id, match_id,
                 ),
             )
             self._save_operation(conn, operation_id, fingerprint, match_id, now)

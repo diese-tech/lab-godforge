@@ -145,3 +145,25 @@ def test_operation_id_cannot_be_reused_for_different_input(history):
             10, "GF-1", organizer_id=99, outcome=MatchOutcome.CANCELLED,
             operation_id="create-1",
         )
+
+
+def test_same_external_match_id_is_isolated_between_guilds(history):
+    create(history)
+    other = history.create(
+        guild_id=20, organizer_id=199, match_id="GF-1",
+        operation_id="other-create",
+        team_one=team("Other Blue", 11, (11, "solo"), (12, "jungle")),
+        team_two=team("Other Red", 13, (13, "mid"), (14, "support")),
+    )
+    history.report_winner(
+        20, "GF-1", captain_id=11, winner=MatchOutcome.TEAM_TWO,
+        operation_id="other-report-one",
+    )
+    other = history.report_winner(
+        20, "GF-1", captain_id=13, winner=MatchOutcome.TEAM_TWO,
+        operation_id="other-report-two",
+    )
+
+    assert other.guild_id == 20
+    assert other.outcome == MatchOutcome.TEAM_TWO
+    assert history.get(10, "GF-1").outcome == MatchOutcome.PENDING
