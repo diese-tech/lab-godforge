@@ -76,6 +76,7 @@ from utils.scrims import (
 from utils.activity_backend import ActivityBackendClient
 from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
+from utils.draft_coordinator import DraftCoordinator
 from utils.draft_render import DraftRenderer
 from utils.session_commands import SessionCommandHandler
 from utils.lifecycle import FeatureRegistry, LifecycleContext
@@ -202,13 +203,6 @@ def _save_active_draft(channel_id: int, draft_id: str):
 def _remove_active_draft(channel_id: int):
     active_draft_store.remove(channel_id)
 
-# Activity backend draft tracking (in-memory, resets on restart).
-_match_ids: dict[int, str] = {}           # channel_id -> match_id
-_match_channels: dict[str, int] = {}      # match_id -> channel_id
-_snapshots: dict[int, dict] = {}          # channel_id -> latest state snapshot
-_board_message_ids: dict[int, int] = {}   # channel_id -> embed message id
-_ws_tasks: dict[int, asyncio.Task] = {}   # channel_id -> listener task
-
 REPORTS_CHANNELS = {
     int(gid.strip()): int(cid.strip())
     for pair in os.getenv("GODFORGE_REPORTS_CHANNELS", "").split(",")
@@ -219,22 +213,16 @@ REPORTS_CHANNELS = {
 
 
 def _channel_has_active(channel_id: int) -> str | None:
+    # Session state is bot-owned; draft state is owned by the draft coordinator.
     if sessions.get(channel_id):
         return "session"
-    if channel_id in _match_ids or drafts.get(channel_id):
+    if draft_coordinator.has_active_draft(channel_id):
         return "draft"
     return None
 
 
 def _cleanup_draft(channel_id: int) -> None:
-    match_id = _match_ids.pop(channel_id, None)
-    if match_id:
-        _match_channels.pop(match_id, None)
-    _snapshots.pop(channel_id, None)
-    _board_message_ids.pop(channel_id, None)
-    task = _ws_tasks.pop(channel_id, None)
-    if task:
-        task.cancel()
+    draft_coordinator.cleanup_draft(channel_id)
 
 
 # Pure draft-command helpers are owned by utils/draft_support (Issue #48).
@@ -264,95 +252,18 @@ async def _activity_get(path: str) -> dict | None:
     return await activity_client.get(path)
 
 
+# Activity-draft rendering, export, and the WS listener are owned by the draft
+# coordinator (Issue #48). bot.py keeps thin delegators for existing call sites.
 async def _update_embed_from_snapshot(snapshot: dict, channel) -> None:
-    channel_id = channel.id
-    embed = formatter.format_board_from_snapshot(snapshot)
-    msg_id = _board_message_ids.get(channel_id)
-    if msg_id:
-        try:
-            msg = await channel.fetch_message(msg_id)
-            await msg.edit(embed=embed)
-            return
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
-    sent = await channel.send(embed=embed)
-    _board_message_ids[channel_id] = sent.id
+    await draft_coordinator.update_embed_from_snapshot(snapshot, channel)
 
 
 async def _post_export(export: dict, channel) -> None:
-    if isinstance(export.get("export"), dict):
-        export = export["export"]
-    guild = getattr(channel, "guild", None)
-    export.setdefault("guild_id", guild.id if guild else None)
-    export.setdefault("channel_id", channel.id)
-    export.setdefault("match_id", export.get("matchId") or export.get("draftId") or export.get("draft_id"))
-    export.setdefault("draft_id", export.get("draftId") or export.get("match_id"))
-    export.setdefault("forgelens_match_id", export.get("forgelensMatchId") or "")
-    export.setdefault("game_number", export.get("gameNumber") or 1)
-    export.setdefault("draft_sequence", export.get("draftSequence") or 1)
-    export.setdefault("status", "draft_complete")
-    export.setdefault("producer", "GodForge")
-    draft_id = export.get("draftId") or export.get("draft_id", "unknown")
-    embed = formatter.format_draft_end_from_export(export)
-    await channel.send(embed=embed)
-    completion_lines = [
-        "Draft complete",
-        f"draft_id={export.get('draft_id', draft_id)}",
-        f"game_number={export.get('game_number', 1)}",
-    ]
-    if forgelens_enabled():
-        completion_lines.insert(
-            2, f"forgelens_match_id={export.get('forgelens_match_id', '')}"
-        )
-    await channel.send("\n".join(completion_lines))
-
-    filename = f"draft_{draft_id}.json"
-    json_bytes = json.dumps(export, indent=2).encode("utf-8")
-    file = discord.File(io.BytesIO(json_bytes), filename=filename)
-    await channel.send(f"📎 Draft record: `{filename}`", file=file)
-
-    guild_id = channel.guild.id if channel.guild else None
-    if guild_id and guild_id in REPORTS_CHANNELS:
-        reports_ch = client.get_channel(REPORTS_CHANNELS[guild_id])
-        if reports_ch:
-            try:
-                await reports_ch.send(embed=embed)
-                report_file = discord.File(io.BytesIO(json_bytes), filename=filename)
-                await reports_ch.send(f"📎 Draft record: `{filename}`", file=report_file)
-            except (discord.Forbidden, discord.HTTPException) as e:
-                log.warning(f"Failed to post to reports channel: {e}")
+    await draft_coordinator.post_export(export, channel)
 
 
 async def _listen_draft_ws(match_id: str, channel_id: int) -> None:
-    """Connect to the Activity backend WebSocket and mirror state to the embed."""
-    ws_url = ACTIVITY_BACKEND_URL.replace("https://", "wss://").replace("http://", "ws://") + "/ws"
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.ws_connect(ws_url) as ws:
-                await ws.send_json({"type": "join", "matchId": match_id})
-                async for msg in ws:
-                    if msg.type == aiohttp.WSMsgType.TEXT:
-                        data = json.loads(msg.data)
-                        if data["type"] == "state":
-                            _snapshots[channel_id] = data["state"]
-                            channel = client.get_channel(channel_id)
-                            if channel:
-                                await _update_embed_from_snapshot(data["state"], channel)
-                        elif data["type"] == "export":
-                            if channel_id in _match_ids:
-                                channel = client.get_channel(channel_id)
-                                if channel:
-                                    await _post_export(data["export"], channel)
-                                _cleanup_draft(channel_id)
-                            break
-                    elif msg.type in (aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR):
-                        break
-    except asyncio.CancelledError:
-        pass
-    except Exception as e:
-        log.error(f"WS listener error for {match_id}: {e}")
-    finally:
-        _ws_tasks.pop(channel_id, None)
+    await draft_coordinator.listen_ws(match_id, channel_id)
 
 
 # ── Discord events ────────────────────────────────────────────────────────────
@@ -634,317 +545,14 @@ async def _handle_session(intent: dict, channel_id: int):
 
 # ── Draft handlers ────────────────────────────────────────────────────────────
 
+# The draft command handlers (local + activity) are owned by DraftCoordinator
+# (Issue #48); bot.py keeps thin delegators.
 async def _handle_draft(intent: dict, message: discord.Message):
-    """Route to Activity backend or local DraftManager based on config."""
-    if ACTIVITY_BACKEND_URL:
-        return await _handle_draft_activity(intent, message)
-    async with drafts.get_lock(message.channel.id):
-        return await _handle_draft_local(intent, message)
-
-
-async def _handle_draft_activity(intent: dict, message: discord.Message):
-    action = intent["action"]
-    channel_id = message.channel.id
-
-    if action == "start":
-        active = _channel_has_active(channel_id)
-        if active == "session":
-            return formatter.format_error("A session is active. Use `.session end` first.")
-        if active == "draft":
-            return formatter.format_error("A draft is already active. Use `.draft end` first.")
-
-        mentions = message.mentions
-        options = _draft_start_options(message.content)
-        if len(mentions) < 2:
-            return formatter.format_error(
-                "Usage: `.draft start @blue_captain @red_captain [--match FL-123] [--game 2]`"
-            )
-        blue_user, red_user = mentions[0], mentions[1]
-        if blue_user.id == red_user.id:
-            return formatter.format_error("Blue and red captains must be different users.")
-        if options["game_number"] < 1:
-            return formatter.format_error("`--game` must be 1 or greater.")
-
-        result = await _activity_post("/api/draft/start", {
-            "blueCaptainId": str(blue_user.id),
-            "blueCaptainName": blue_user.display_name,
-            "redCaptainId": str(red_user.id),
-            "redCaptainName": red_user.display_name,
-            "forgelensMatchId": options["forgelens_match_id"],
-            "gameNumber": options["game_number"],
-        })
-        if not result or "error" in result:
-            err = result.get("error") if result else "Activity backend unreachable."
-            return formatter.format_error(err)
-
-        match_id = result["matchId"]
-        _match_ids[channel_id] = match_id
-        _match_channels[match_id] = channel_id
-        snapshot = result["state"]
-        _snapshots[channel_id] = snapshot
-
-        embed = formatter.format_board_from_snapshot(snapshot)
-        sent = await message.channel.send(
-            f"🎮 Draft `{match_id}` started — open the Activity and enter this ID to join",
-            embed=embed,
-        )
-        _board_message_ids[channel_id] = sent.id
-
-        task = asyncio.create_task(_listen_draft_ws(match_id, channel_id))
-        _ws_tasks[channel_id] = task
-        log.info(f"Draft {match_id} started: 🔵 {blue_user.display_name} vs 🔴 {red_user.display_name}")
-        return None
-
-    elif action == "show":
-        match_id = _match_ids.get(channel_id)
-        if not match_id:
-            return formatter.format_error("No active draft in this channel.")
-        snapshot = await _activity_get(f"/api/draft/{match_id}")
-        if not snapshot or "error" in snapshot:
-            return formatter.format_error("Could not retrieve draft state.")
-        return formatter.format_board_from_snapshot(snapshot)
-
-    elif action == "undo":
-        match_id = _match_ids.get(channel_id)
-        if not match_id:
-            return formatter.format_error("No active draft in this channel.")
-        result = await _activity_post(f"/api/draft/{match_id}/undo")
-        if not result or "error" in result:
-            return formatter.format_error(result.get("error", "Nothing to undo.") if result else "Backend unreachable.")
-        return None  # WS listener updates the embed
-
-    elif action == "next":
-        match_id = _match_ids.get(channel_id)
-        if not match_id:
-            return formatter.format_error("No active draft in this channel.")
-        result = await _activity_post(f"/api/draft/{match_id}/next")
-        if not result or "error" in result:
-            return formatter.format_error(result.get("error", "Cannot advance game.") if result else "Backend unreachable.")
-        return None  # WS listener updates the embed
-
-    elif action == "end":
-        match_id = _match_ids.get(channel_id)
-        if not match_id:
-            return formatter.format_error("No active draft in this channel.")
-        result = await _activity_post(f"/api/draft/{match_id}/end")
-        if not result or "error" in result:
-            return formatter.format_error(result.get("error", "Failed to end draft.") if result else "Backend unreachable.")
-        _cleanup_draft(channel_id)
-        await _post_export(result, message.channel)
-        log.info(f"Draft {match_id} ended via text command")
-        return None
-
-
-async def _handle_draft_local(intent: dict, message: discord.Message):
-    """Local DraftManager path — active when ACTIVITY_BACKEND_URL is not set."""
-    action = intent["action"]
-    channel_id = message.channel.id
-
-    if action == "start":
-        active = _channel_has_active(channel_id)
-        if active == "session":
-            return formatter.format_error("A session is active in this channel. Use `.session end` first.")
-        if active == "draft":
-            return formatter.format_error("A draft is already active in this channel. Use `.draft end` first.")
-
-        options = _draft_start_options(message.content)
-        mentions = message.mentions
-        if len(mentions) < 2:
-            return formatter.format_error(
-                "Usage: `.draft start @blue_captain @red_captain [--match FL-123] [--game 2]`"
-            )
-        blue_user, red_user = mentions[0], mentions[1]
-        if blue_user.id == red_user.id:
-            return formatter.format_error("Blue and red captains must be different users.")
-        if options["game_number"] < 1:
-            return formatter.format_error("`--game` must be 1 or greater.")
-
-        guild = message.guild
-        draft = drafts.start(
-            channel_id,
-            blue_captain_id=blue_user.id,
-            blue_captain_name=blue_user.display_name,
-            red_captain_id=red_user.id,
-            red_captain_name=red_user.display_name,
-            guild_id=guild.id if guild else 0,
-            guild_name=guild.name if guild else "DM",
-            channel_name=message.channel.name if hasattr(message.channel, "name") else "unknown",
-            forgelens_match_id=options["forgelens_match_id"],
-            game_number=options["game_number"],
-        )
-        if not draft:
-            return formatter.format_error("Failed to start draft.")
-
-        embed = formatter.format_draft_board(draft)
-        sent = await message.channel.send(embed=embed)
-        draft.board_message_id = sent.id
-        _save_active_draft(channel_id, draft.draft_id)
-        log.info(f"Draft {draft.draft_id} started in channel {channel_id}: "
-                 f"🔵 {blue_user.display_name} vs 🔴 {red_user.display_name}")
-        return None
-
-    elif action == "show":
-        draft = drafts.get(channel_id)
-        if not draft:
-            return formatter.format_error("No active draft in this channel.")
-        return formatter.format_draft_show(draft)
-
-    elif action == "next":
-        draft = drafts.get(channel_id)
-        if not draft:
-            return formatter.format_error("No active draft in this channel.")
-        error = draft.advance_game()
-        if error:
-            return formatter.format_error(error)
-        for team in ("blue", "red"):
-            mid = draft.claim_message_ids.get(team)
-            if mid:
-                _tracked_messages.pop(mid, None)
-        await message.channel.send(formatter.format_draft_next(draft))
-        embed = formatter.format_draft_board(draft)
-        sent = await message.channel.send(embed=embed)
-        draft.board_message_id = sent.id
-        log.info(f"Draft {draft.draft_id} advanced to Game {draft.current_game.game_number}")
-        return None
-
-    elif action == "end":
-        draft = drafts.end(channel_id)
-        if not draft:
-            return formatter.format_error("No active draft in this channel.")
-        export = draft.to_export_dict()
-        embed = formatter.format_draft_end(draft, export)
-        await message.channel.send(embed=embed)
-        filename = draft.sanitized_filename()
-        json_bytes = json.dumps(export, indent=2).encode("utf-8")
-        file = discord.File(io.BytesIO(json_bytes), filename=filename)
-        await message.channel.send(f"📎 Draft record: `{filename}`", file=file)
-        guild_id = message.guild.id if message.guild else None
-        if guild_id and guild_id in REPORTS_CHANNELS:
-            reports_ch = client.get_channel(REPORTS_CHANNELS[guild_id])
-            if reports_ch:
-                try:
-                    await reports_ch.send(embed=embed)
-                    report_file = discord.File(io.BytesIO(json_bytes), filename=filename)
-                    await reports_ch.send(f"📎 Draft record: `{filename}`", file=report_file)
-                    log.info(f"Draft {draft.draft_id} report posted to reports channel")
-                except (discord.Forbidden, discord.HTTPException) as e:
-                    log.warning(f"Failed to post to reports channel: {e}")
-        _remove_active_draft(channel_id)
-        log.info(f"Draft {draft.draft_id} ended: {len(export['games'])} game(s)")
-        return None
-
-    elif action == "undo":
-        draft = drafts.get(channel_id)
-        if not draft:
-            return formatter.format_error("No active draft in this channel.")
-        result = draft.undo()
-        if result is None:
-            return formatter.format_error("Nothing to undo.")
-        if result["type"] == "step":
-            await message.channel.send(
-                formatter.format_draft_undo(result["team"], result["action"], result["god"])
-            )
-        elif result["type"] == "claim":
-            await message.channel.send(
-                formatter.format_claim_undo(result["team"], result["god"], result["user_name"])
-            )
-            await _update_claim_embed(draft, result["team"], message.channel)
-        elif result["type"] == "next_game":
-            await message.channel.send(
-                f"↩️ Undid game advance. Back to **Game {result['game_number']}**."
-            )
-        await _update_draft_board(draft, message.channel)
-        return None
+    return await draft_coordinator.handle_draft(intent, message)
 
 
 async def _handle_draft_action(intent: dict, message: discord.Message):
-    """Route to Activity backend or local DraftManager based on config."""
-    if ACTIVITY_BACKEND_URL:
-        return await _handle_draft_action_activity(intent, message)
-    async with drafts.get_lock(message.channel.id):
-        return await _handle_draft_action_local(intent, message)
-
-
-async def _handle_draft_action_local(intent: dict, message: discord.Message):
-    """Local .ban / .pick handler."""
-    channel_id = message.channel.id
-    draft = drafts.get(channel_id)
-    if not draft:
-        return formatter.format_error("No active draft in this channel. Use `.draft start` first.")
-    if draft.is_claiming():
-        return formatter.format_error("Players are claiming gods. Use `.draft undo` if you need to fix something.")
-    turn = draft.get_current_team_and_action()
-    if turn is None:
-        return formatter.format_error("Current game is complete. Use `.draft next` or `.draft end`.")
-    current_team, expected_action = turn
-    action = intent["action"]
-    if action != expected_action:
-        return formatter.format_error(f"It's time to **{expected_action}**, not {action}.")
-    expected_captain_id = draft.get_current_captain_id()
-    if message.author.id != expected_captain_id:
-        captain_name = (draft.blue_captain["name"] if current_team == "blue"
-                        else draft.red_captain["name"])
-        return formatter.format_error(f"It's **{captain_name}**'s turn ({current_team}).")
-    god, error = resolve_god_name(intent["god_input"])
-    if error:
-        return formatter.format_error(error)
-    unavailable = draft.get_unavailable_gods()
-    if god in unavailable:
-        if god in draft.fearless_pool:
-            return formatter.format_error(f"**{god}** is in the fearless pool and unavailable this set.")
-        return formatter.format_error(f"**{god}** has already been {expected_action}ned this game.")
-    team, action_done = draft.execute_step(god)
-    await message.channel.send(formatter.format_draft_action(team, action_done, god, draft.draft_id))
-    await _update_draft_board(draft, message.channel)
-    log.info(f"Draft {draft.draft_id}: {team} {action_done} {god} (step {draft.current_game.step}/20)")
-    if draft.current_game.is_complete():
-        await _post_claim_embeds(draft, message.channel)
-    return None
-
-
-async def _handle_draft_action_activity(intent: dict, message: discord.Message):
-    """Activity backend .ban / .pick handler."""
-    channel_id = message.channel.id
-    match_id = _match_ids.get(channel_id)
-
-    if not match_id:
-        return formatter.format_error("No active draft. Use `.draft start` first.")
-
-    snapshot = _snapshots.get(channel_id)
-    if not snapshot:
-        return formatter.format_error("Draft state loading — try again in a moment.")
-
-    if snapshot.get("isClaiming"):
-        return formatter.format_error("Claiming phase active. Use `.draft undo` to go back.")
-
-    turn = snapshot.get("currentTurn")
-    if not turn:
-        return formatter.format_error("Game complete. Use `.draft next` or `.draft end`.")
-
-    action = intent["action"]
-    if action != turn["action"]:
-        return formatter.format_error(f"It's time to **{turn['action']}**, not {action}.")
-
-    expected_captain_id = snapshot.get("currentCaptainId")
-    if expected_captain_id and str(message.author.id) != expected_captain_id:
-        team = turn["team"]
-        captain_name = (snapshot["blueCaptain"]["name"] if team == "blue"
-                        else snapshot["redCaptain"]["name"])
-        return formatter.format_error(f"It's **{captain_name}**'s turn ({team}).")
-
-    god, error = resolve_god_name(intent["god_input"])
-    if error:
-        return formatter.format_error(error)
-
-    result = await _activity_post(f"/api/draft/{match_id}/action", {
-        "god": god,
-        "userId": str(message.author.id),
-    })
-    if not result or "error" in result:
-        return formatter.format_error(result.get("error", f"{god} is unavailable.") if result else "Backend unreachable.")
-
-    log.info(f"Draft {match_id}: {turn['team']} {turn['action']} {god} via text command")
-    return None  # WS listener updates the embed
+    return await draft_coordinator.handle_draft_action(intent, message)
 
 
 # ── Local draft helpers (used when ACTIVITY_BACKEND_URL is not set) ───────────
@@ -969,6 +577,23 @@ async def _update_claim_embed(draft, team, channel):
     await draft_renderer.update_claim_embed(draft, team, channel)
 
 
+# Draft feature coordinator (Issue #48): owns local + activity draft handlers,
+# the activity-draft state, the WS listener, export posting, and claim reactions.
+draft_coordinator = DraftCoordinator(
+    client=client,
+    drafts=drafts,
+    activity_client=activity_client,
+    renderer=draft_renderer,
+    active_draft_store=active_draft_store,
+    tracked_messages=_tracked_messages,
+    formatter=formatter,
+    resolve_god_name=resolve_god_name,
+    reports_channels=REPORTS_CHANNELS,
+    number_emojis=NUMBER_EMOJIS,
+    channel_has_active=_channel_has_active,
+    log=log,
+)
+
 
 # ── Reaction handler ──────────────────────────────────────────────────────────
 
@@ -990,51 +615,9 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 
 
 async def _handle_claim_reaction(payload, info, message_id, channel_id, emoji):
-    """Handle 1️⃣-5️⃣ reactions on local draft claim embeds."""
-    if emoji not in NUMBER_EMOJIS:
-        return
-    async with drafts.get_lock(channel_id):
-        draft = drafts.get(channel_id)
-        if not draft:
-            return
-        channel = client.get_channel(channel_id)
-        if not channel:
-            return
-        try:
-            msg = await channel.fetch_message(message_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            _tracked_messages.pop(message_id, None)
-            return
-        team = info["team"]
-        picks = info["picks"]
-        index = NUMBER_EMOJIS.index(emoji)
-        if index >= len(picks):
-            return
-        god = picks[index]
-        guild = client.get_guild(payload.guild_id) if payload.guild_id else None
-        if guild:
-            member = guild.get_member(payload.user_id)
-            if not member:
-                try:
-                    member = await guild.fetch_member(payload.user_id)
-                except (discord.NotFound, discord.Forbidden):
-                    return
-            user_name = member.display_name
-        else:
-            user = client.get_user(payload.user_id)
-            if not user:
-                try:
-                    user = await client.fetch_user(payload.user_id)
-                except (discord.NotFound, discord.Forbidden):
-                    return
-            user_name = user.display_name
-        if draft.claim_god(team, god, payload.user_id, user_name):
-            log.info(f"Draft {draft.draft_id}: {user_name} claimed {god} ({team})")
-            await _update_claim_embed(draft, team, channel)
-            if draft.current_game.is_fully_claimed():
-                await channel.send(_draft_completion_marker(draft))
-                log.info(f"Draft {draft.draft_id}: all claims complete for "
-                         f"Game {draft.current_game.game_number}")
+    await draft_coordinator.handle_claim_reaction(
+        payload, info, message_id, channel_id, emoji
+    )
 
 
 async def _handle_session_reaction(payload, info, message_id, channel_id, emoji):
@@ -3276,18 +2859,19 @@ async def _launch_party_draft(
             if not result or not result.get("matchId"):
                 raise PartyDraftError("the Activity backend did not start the draft")
             activity_id = result["matchId"]
-            _match_ids[channel.id] = activity_id
-            _match_channels[activity_id] = channel.id
+            # Register the activity draft through the coordinator, which owns the
+            # in-memory draft state and the WS listener (Issue #48).
+            draft_coordinator.match_ids[channel.id] = activity_id
+            draft_coordinator.match_channels[activity_id] = channel.id
             if result.get("state"):
-                _snapshots[channel.id] = result["state"]
+                draft_coordinator.snapshots[channel.id] = result["state"]
                 sent = await channel.send(
                     f"🎮 Draft `{activity_id}` started — open the Activity and "
                     "enter this ID to join",
                     embed=formatter.format_board_from_snapshot(result["state"]),
                 )
-                _board_message_ids[channel.id] = sent.id
-            task = asyncio.create_task(_listen_draft_ws(activity_id, channel.id))
-            _ws_tasks[channel.id] = task
+                draft_coordinator.board_message_ids[channel.id] = sent.id
+            draft_coordinator.start_ws(activity_id, channel.id)
         else:
             draft = drafts.start(
                 channel.id,
