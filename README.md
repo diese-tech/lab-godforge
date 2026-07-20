@@ -97,6 +97,9 @@ Important status notes:
 - `/party schedule` creates one-time or weekly custom nights after explicit
   timezone confirmation. RSVPs retain saved roles, overflow into a waitlist,
   receive reminders, export to ICS, and open into the same durable lobby flow.
+- `/scrim team-create`, `/scrim challenge`, and `/scrim launch` coordinate
+  premade teams and then reuse the scheduled-night, party, room, draft, and
+  result workflow. See [`docs/TEAM_SCRIMS.md`](docs/TEAM_SCRIMS.md).
 - GodForge stores standalone match records with two-captain winner
   confirmation, organizer dispute resolution, explicit cancelled/no-contest
   outcomes, and guild/team/player game-night history.

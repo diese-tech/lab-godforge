@@ -55,6 +55,10 @@ Latest stable release. Historical scope:
 
 Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
 
+- Guild-scoped premade team rosters, substitutes, regions, and availability.
+- Durable captain scrim challenges with counterproposals, check-in, organizer
+  roster locks, and launch through the canonical party workflow.
+
 - **Standalone product boundary**: normal GodForge workflows and help surfaces no
   longer require or advertise a companion service.
 - **Durable party lifecycle**: explicit open, full, ready-check, forming, active,
