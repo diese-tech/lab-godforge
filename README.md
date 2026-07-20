@@ -317,6 +317,8 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 
 ## Roadmap
 
+- See [`docs/STANDALONE_PRODUCT_PLAN.md`](docs/STANDALONE_PRODUCT_PLAN.md) for
+  the standalone GodForge product direction and phased implementation plan.
 - Stabilize the live dashboard bridge and OAuth permission checks.
 - Move single-tenant constants into guild-scoped config.
 - Add a safer durable backing store for orchestration data where JSON is too fragile.
