@@ -22,7 +22,9 @@ LOBBY_CARD_ACTIONS = (
     ("cancel", "Cancel", discord.ButtonStyle.danger),
     ("share", "Share", discord.ButtonStyle.secondary),
     ("ready_check", "Ready Check", discord.ButtonStyle.primary),
-    ("launch_draft", "Launch Draft", discord.ButtonStyle.success),
+    ("teams_role_fit", "Role Fit Teams", discord.ButtonStyle.success),
+    ("teams_balanced", "Balanced Teams", discord.ButtonStyle.success),
+    ("teams_captains", "Captain Teams", discord.ButtonStyle.primary),
 )
 
 READY_CHECK_ACTIONS = (

@@ -16,14 +16,14 @@ def _ready_lobby():
             captain=user_id in {1, 2},
         )
         for user_id, role in enumerate(
-            ("solo", "jungle", "mid", "support", "adc", "solo"), start=1
+            ("solo", "jungle", "mid", "support", "adc") * 2, start=1
         )
     )
     return PartyLobby(
         "lobby-1",
         guild_id=10,
         organizer_id=99,
-        capacity=6,
+        capacity=10,
         state=LobbyState.FORMING,
         participants=players,
         mode="conquest",
@@ -38,7 +38,7 @@ def test_form_teams_spreads_volunteer_captains_deterministically():
 
     assert blue.captain_id == 1
     assert red.captain_id == 2
-    assert set(blue.participant_ids + red.participant_ids) == set(range(1, 7))
+    assert set(blue.participant_ids + red.participant_ids) == set(range(1, 11))
 
 
 def test_form_teams_requires_ready_lobby():
@@ -69,6 +69,38 @@ def test_launch_is_idempotent_and_retains_party_context(tmp_path):
     assert first.snapshot["lobby_id"] == "lobby-1"
     assert first.snapshot["rules"]["mode"] == "conquest"
     assert first.snapshot["participants"][0]["assigned_roles"] == ["solo"]
+    assert first.snapshot["formation"]["mode"] == "role_fit"
+    assert first.snapshot["formation"]["first_choices"] == 10
+    assert len(first.snapshot["formation"]["blue"]) == 5
+
+
+def test_launch_snapshot_retains_godforge_owned_balance_inputs(tmp_path):
+    repo = PartyDraftLaunchRepository(tmp_path / "party.db")
+    organizer_inputs = {
+        user_id: {
+            "skill_band": "competitive" if user_id <= 5 else "beginner",
+            "experience": user_id,
+            "recent_adjustment": -1,
+        }
+        for user_id in range(1, 11)
+    }
+
+    launch, _ = repo.begin(
+        _ready_lobby(),
+        operation_id="balanced-interaction",
+        channel_id=500,
+        match_id_factory=lambda: "GF-0044",
+        formation_mode="balanced",
+        organizer_inputs=organizer_inputs,
+    )
+
+    assert launch.snapshot["formation"]["mode"] == "balanced"
+    strengths = [
+        player["strength"]
+        for side in ("blue", "red")
+        for player in launch.snapshot["formation"][side]
+    ]
+    assert max(strengths) > min(strengths)
 
 
 def test_failed_launch_can_be_retried_without_reusing_match_id(tmp_path):

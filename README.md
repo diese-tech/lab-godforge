@@ -104,6 +104,10 @@ Important status notes:
   lobby organizer scoped lock, unlock, remove, transfer, voice-move, and close
   controls. Room records survive restarts, reconcile missing resources, archive
   a summary, and remove empty voice rooms after a grace period.
+- After all ten players are ready, organizers choose Role Fit, Balanced, or
+  Captain Teams directly on the lobby card. Every result has one Solo, Jungle,
+  Mid, Support, and ADC per side and reports role satisfaction, unavoidable
+  fills, and the GodForge-owned strength difference before drafting continues.
 
 ## Architecture / System Flow
 
