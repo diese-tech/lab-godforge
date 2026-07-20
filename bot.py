@@ -78,6 +78,7 @@ from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
 from utils.draft_coordinator import DraftCoordinator
 from utils.draft_render import DraftRenderer
+from utils.match_room_factory import MatchRoomServiceFactory
 from utils.session_commands import SessionCommandHandler
 from utils.lifecycle import FeatureRegistry, LifecycleContext
 from utils.routing import CommandRegistry
@@ -1899,24 +1900,15 @@ party_commands = app_commands.Group(
 client.tree.add_command(party_commands)
 
 
+# Per-guild temporary-room service construction is owned by the factory
+# (Issue #48); bot.py keeps a thin delegator.
+match_room_service_factory = MatchRoomServiceFactory(
+    match_room_repository, settings.get_guild_settings
+)
+
+
 def _match_room_service_for_guild(guild: discord.Guild) -> MatchRoomService:
-    managed = settings.get_guild_settings(str(guild.id))["managed"]
-    category_id = int(managed.get("roomCategoryId") or 0)
-    archive_channel_id = int(managed.get("playChannelId") or 0)
-    if not category_id or not archive_channel_id:
-        raise RuntimeError("Run /party setup before creating temporary rooms.")
-    grace = timedelta(
-        minutes=1 if managed.get("testMode") else 10
-    )
-    return MatchRoomService(
-        match_room_repository,
-        DiscordMatchRoomOperations(
-            guild,
-            category_id=category_id,
-            archive_channel_id=archive_channel_id,
-        ),
-        empty_grace=grace,
-    )
+    return match_room_service_factory.for_guild(guild)
 
 
 @party_commands.command(name="setup", description="Set up GodForge for this server")
