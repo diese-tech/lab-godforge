@@ -70,7 +70,6 @@ async function loadAdminStatus() {
     const payload = await getAdminStatus();
     const status = payload.status || {};
     const bot = status.bot || {};
-    const data = status.data || {};
 
     if (summary) {
       summary.innerHTML = `
