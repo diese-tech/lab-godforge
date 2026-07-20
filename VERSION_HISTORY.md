@@ -76,6 +76,9 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
 - **Reusable lobby cards**: Discord modals capture lobby rules and structured
   role preferences; persistent cards support joining, leaving, organizer edits,
   cancellation, and sharing while retaining state across restarts.
+- **Reliable ready rosters**: concurrency-safe capacity, durable waitlists,
+  role-aware substitute promotion, bounded ready-check extensions, and timeout
+  cancellation survive process restarts.
 
 ## Future Version Gates
 

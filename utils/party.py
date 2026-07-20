@@ -34,7 +34,12 @@ ACTIVE_STATES = frozenset(LobbyState) - TERMINAL_STATES
 ALLOWED_TRANSITIONS = MappingProxyType(
     {
         LobbyState.OPEN: frozenset(
-            {LobbyState.FULL, LobbyState.CANCELLED, LobbyState.EXPIRED}
+            {
+                LobbyState.FULL,
+                LobbyState.READY_CHECK,
+                LobbyState.CANCELLED,
+                LobbyState.EXPIRED,
+            }
         ),
         LobbyState.FULL: frozenset(
             {
