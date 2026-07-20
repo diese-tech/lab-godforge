@@ -75,6 +75,7 @@ from utils.scrims import (
 )
 from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
+from utils.session_commands import SessionCommandHandler
 from utils.lifecycle import FeatureRegistry, LifecycleContext
 from utils.routing import CommandRegistry
 from utils.r67.feature import R67Feature
@@ -636,41 +637,18 @@ async def on_message(message: discord.Message):
 
 # ── Session handlers ──────────────────────────────────────────────────────────
 
+# `.session` command behavior is owned by the feature handler (Issue #48); bot.py
+# injects the shared collaborators and keeps a thin delegator.
+session_command_handler = SessionCommandHandler(
+    sessions=sessions,
+    formatter=formatter,
+    tracked_messages=_tracked_messages,
+    channel_has_active=_channel_has_active,
+)
+
+
 async def _handle_session(intent: dict, channel_id: int):
-    action = intent["action"]
-
-    if action == "start":
-        active = _channel_has_active(channel_id)
-        if active == "draft":
-            return formatter.format_error("A draft is active in this channel. Use `.draft end` first.")
-        if sessions.start(channel_id):
-            return "✅ Draft session started! Use `.session end` when done."
-        return formatter.format_error("A session is already active. Use `.session end` first.")
-
-    elif action == "end":
-        session = sessions.end(channel_id)
-        if session:
-            to_remove = [mid for mid, info in _tracked_messages.items()
-                         if info.get("channel_id") == channel_id]
-            for mid in to_remove:
-                del _tracked_messages[mid]
-            return formatter.format_session_end(session.picks)
-        return formatter.format_error("No active session in this channel.")
-
-    elif action == "show":
-        session = sessions.get(channel_id)
-        if session:
-            return formatter.format_session_show(session.picks)
-        return formatter.format_error("No active session in this channel.")
-
-    elif action == "reset":
-        if sessions.reset(channel_id):
-            to_remove = [mid for mid, info in _tracked_messages.items()
-                         if info.get("channel_id") == channel_id]
-            for mid in to_remove:
-                del _tracked_messages[mid]
-            return "🔄 Session picks cleared. Session is still active."
-        return formatter.format_error("No active session in this channel.")
+    return await session_command_handler.handle(intent, channel_id)
 
 
 # ── Draft handlers ────────────────────────────────────────────────────────────
