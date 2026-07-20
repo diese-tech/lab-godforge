@@ -263,6 +263,35 @@ class PartyQueueService:
             await self._repository.save(queue)
             return _copy_queue(queue), tuple(promoted)
 
+    async def reset_roster(
+        self, lobby_id: str, active_ids: tuple[int, ...] | None = None
+    ) -> PartyQueue:
+        """Reopen a queue after a match and optionally project its next roster."""
+        async with await self._lock_for(lobby_id):
+            queue = await self._required(lobby_id)
+            members = {member.user_id: member for member in (*queue.active, *queue.waitlist)}
+            if active_ids is not None:
+                if len(active_ids) != len(set(active_ids)):
+                    raise QueueError("active roster contains duplicate players")
+                unknown = set(active_ids) - members.keys()
+                if unknown:
+                    raise QueueError("active roster contains players outside the queue")
+                queue.active = [members[user_id] for user_id in active_ids]
+                selected = set(active_ids)
+                queue.waitlist = sorted(
+                    (
+                        member for user_id, member in members.items()
+                        if user_id not in selected
+                    ),
+                    key=lambda member: member.joined_sequence,
+                )
+            queue.status = QueueStatus.OPEN
+            queue.ready = {}
+            queue.ready_deadline = None
+            queue.extensions_used = 0
+            await self._repository.save(queue)
+            return _copy_queue(queue)
+
     async def join(
         self, lobby_id: str, user_id: int, preferred_roles: tuple[str, ...] = ()
     ) -> tuple[PartyQueue, str]:

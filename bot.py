@@ -47,6 +47,7 @@ from utils.lobby_views import (
     CreateLobbyModal,
     JoinPreferencesModal,
     LobbyCardView,
+    MatchContinuityView,
     MatchResultView,
     ReadyCheckView,
 )
@@ -71,6 +72,12 @@ from utils.match_history import (
     MatchOutcome,
     MatchPlayer,
     MatchTeam,
+)
+from utils.match_continuity import (
+    ContinuityError,
+    ContinuityStatus,
+    MatchContinuityRepository,
+    MatchContinuityService,
 )
 from utils.team_formation import FormationMode
 from utils import match_ids
@@ -120,6 +127,7 @@ class GodForgeClient(discord.Client):
         self.add_view(LobbyCardView(_handle_lobby_card_action))
         self.add_view(ReadyCheckView(_handle_ready_check_action))
         self.add_view(MatchResultView(_handle_match_result_action))
+        self.add_view(MatchContinuityView(_handle_match_continuity_action))
         await self.tree.sync()
 
 
@@ -136,6 +144,7 @@ party_queue_service = PartyQueueService(
 )
 party_draft_repository = PartyDraftLaunchRepository(_PARTY_DB_PATH)
 match_history_repository = MatchHistoryRepository(_PARTY_DB_PATH)
+match_continuity_repository = MatchContinuityRepository(_PARTY_DB_PATH)
 match_room_repository = SQLiteMatchRoomRepository(_PARTY_DB_PATH)
 schedule_repository = ScheduleRepository(_PARTY_DB_PATH)
 forgelens_adapter = ForgeLensAdapter()
@@ -3218,7 +3227,7 @@ async def _handle_match_result_action(
     await interaction.response.edit_message(
         embed=_match_result_embed(changed),
         view=(
-            None
+            MatchContinuityView(_handle_match_continuity_action)
             if changed.outcome in {
                 MatchOutcome.TEAM_ONE,
                 MatchOutcome.TEAM_TWO,
@@ -3227,6 +3236,96 @@ async def _handle_match_result_action(
             }
             else MatchResultView(_handle_match_result_action)
         ),
+    )
+
+
+async def _handle_match_continuity_action(
+    interaction: discord.Interaction,
+    action: str,
+) -> None:
+    """Select and reconcile exactly one post-match next state."""
+    if interaction.guild is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    match_id = _match_id_from_interaction(interaction)
+    record = match_history_repository.get(interaction.guild.id, match_id)
+    launch = party_draft_repository.get_by_match_id(interaction.guild.id, match_id)
+    if record is None or launch is None:
+        await interaction.response.send_message(
+            "The source match or lobby launch could not be found.", ephemeral=True
+        )
+        return
+    if interaction.user.id != record.organizer_id:
+        await interaction.response.send_message(
+            "Only the organizer can choose what happens next.", ephemeral=True
+        )
+        return
+
+    async def reconcile_rooms(lobby_id, _participant_ids):
+        rooms = match_room_repository.get(lobby_id)
+        if rooms is None or not rooms.resource_ids:
+            return False
+        await _match_room_service_for_guild(interaction.guild).reconcile(lobby_id)
+        return True
+
+    async def create_next_match(result):
+        match_history_repository.create(
+            guild_id=record.guild_id,
+            organizer_id=record.organizer_id,
+            team_one=result.team_one,
+            team_two=result.team_two,
+            operation_id=(
+                f"continuity-history:{record.guild_id}:{record.match_id}:"
+                f"{result.action.value}"
+            ),
+            draft_reference=result.next_match_id,
+            match_id=result.next_match_id,
+        )
+
+    service = MatchContinuityService(
+        match_continuity_repository,
+        party_queue_service,
+        room_reconciler=reconcile_rooms,
+        draft_starter=create_next_match,
+    )
+    try:
+        result = await service.continue_match(
+            record,
+            lobby_id=launch.lobby_id,
+            action=action,
+            operation_id=f"discord:{interaction.id}:continuity",
+        )
+    except (ContinuityError, QueueError, ValueError) as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+
+    lines = [
+        f"**{result.action.value.replace('_', ' ').title()}** selected.",
+        f"State: `{result.status.value}`",
+    ]
+    if result.next_match_id:
+        lines.append(f"Next match: `{result.next_match_id}`")
+    if result.reused_rooms:
+        lines.append("Temporary rooms were reconciled and reused.")
+    if result.promoted_ids:
+        lines.append(
+            "Promoted substitutes: "
+            + " ".join(f"<@{user_id}>" for user_id in result.promoted_ids)
+        )
+    if result.changes:
+        lines.append("Assignment changes:")
+        lines.extend(
+            f"- <@{change.user_id}>: "
+            f"{change.previous_team or 'queue'}/{change.previous_role or 'unassigned'} "
+            f"-> {change.next_team or 'queue'}/{change.next_role or 'unassigned'}"
+            for change in result.changes
+        )
+    if result.status is ContinuityStatus.AWAITING_SUBSTITUTES:
+        lines.append("The waitlist needs more eligible substitutes before launch.")
+    await interaction.response.edit_message(
+        content="\n".join(lines),
+        view=None,
+        allowed_mentions=discord.AllowedMentions(users=True, roles=False),
     )
 
 

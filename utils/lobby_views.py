@@ -14,6 +14,7 @@ JOIN_MODAL_CUSTOM_ID = "godforge:lobby:join-preferences:v1"
 LOBBY_CARD_CUSTOM_ID_PREFIX = "godforge:lobby:card"
 READY_CHECK_CUSTOM_ID_PREFIX = "godforge:lobby:ready-check"
 MATCH_RESULT_CUSTOM_ID_PREFIX = "godforge:match:result"
+MATCH_CONTINUITY_CUSTOM_ID_PREFIX = "godforge:match:continuity"
 
 LOBBY_CARD_ACTIONS = (
     ("join", "Join", discord.ButtonStyle.success),
@@ -38,6 +39,14 @@ MATCH_RESULT_ACTIONS = (
     ("team_two", "Red Won", discord.ButtonStyle.danger),
     ("cancelled", "Cancel", discord.ButtonStyle.secondary),
     ("no_contest", "No Contest", discord.ButtonStyle.secondary),
+)
+
+MATCH_CONTINUITY_ACTIONS = (
+    ("run_it_back", "Run It Back", discord.ButtonStyle.success),
+    ("shuffle_teams", "Shuffle Teams", discord.ButtonStyle.primary),
+    ("return_to_queue", "Return to Queue", discord.ButtonStyle.secondary),
+    ("invite_substitutes", "Invite Substitutes", discord.ButtonStyle.secondary),
+    ("continue_series", "Continue Series", discord.ButtonStyle.success),
 )
 
 ModalHandler = Callable[[discord.Interaction, dict[str, object]], Awaitable[None]]
@@ -319,6 +328,24 @@ class MatchResultView(discord.ui.View):
                     style,
                     handler,
                     custom_id_prefix=MATCH_RESULT_CUSTOM_ID_PREFIX,
+                    row=0,
+                )
+            )
+
+
+class MatchContinuityView(discord.ui.View):
+    """Persistent organizer controls attached after a confirmed match."""
+
+    def __init__(self, handler: LobbyActionHandler) -> None:
+        super().__init__(timeout=None)
+        for action, label, style in MATCH_CONTINUITY_ACTIONS:
+            self.add_item(
+                _LobbyActionButton(
+                    action,
+                    label,
+                    style,
+                    handler,
+                    custom_id_prefix=MATCH_CONTINUITY_CUSTOM_ID_PREFIX,
                     row=0,
                 )
             )
