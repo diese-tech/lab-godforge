@@ -73,6 +73,7 @@ from utils.scrims import (
     ScrimRepository,
     launch_scrim,
 )
+from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
 from utils.lifecycle import FeatureRegistry, LifecycleContext
 from utils.routing import CommandRegistry
@@ -182,31 +183,21 @@ command_registry = CommandRegistry()
 # Track metadata for reaction-enabled messages (sessions only).
 _tracked_messages = {}
 
-_ACTIVE_DRAFTS_FILE = os.path.join("data", "active_local_drafts.json")
+# Durable local-draft restart pointer is owned by ActiveDraftStore (Issue #48).
+active_draft_store = ActiveDraftStore()
+_ACTIVE_DRAFTS_FILE = active_draft_store.path
 
 
 def _load_active_drafts() -> dict:
-    try:
-        with open(_ACTIVE_DRAFTS_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
+    return active_draft_store.load()
 
 
 def _save_active_draft(channel_id: int, draft_id: str):
-    data = _load_active_drafts()
-    data[str(channel_id)] = draft_id
-    os.makedirs("data", exist_ok=True)
-    with open(_ACTIVE_DRAFTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f)
+    active_draft_store.save(channel_id, draft_id)
 
 
 def _remove_active_draft(channel_id: int):
-    data = _load_active_drafts()
-    if str(channel_id) in data:
-        data.pop(str(channel_id))
-        with open(_ACTIVE_DRAFTS_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f)
+    active_draft_store.remove(channel_id)
 
 # Activity backend draft tracking (in-memory, resets on restart).
 _match_ids: dict[int, str] = {}           # channel_id -> match_id
