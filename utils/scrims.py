@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
 import threading
 import uuid
@@ -14,6 +15,8 @@ from pathlib import Path
 
 from utils.party import PlayerPreferences, ensure_utc
 from utils.party_schedule import Recurrence, ScheduleRepository, convert_to_lobby
+from utils.party_draft import DraftTeam
+from utils.team_formation import SMITE_ROLES
 
 
 class ScrimError(ValueError):
@@ -88,10 +91,17 @@ class ScrimRepository:
                 );
                 CREATE TABLE IF NOT EXISTS scrim_operations (
                   operation_id TEXT PRIMARY KEY, kind TEXT NOT NULL,
-                  entity_id TEXT NOT NULL
+                  entity_id TEXT NOT NULL, fingerprint TEXT NOT NULL DEFAULT ''
                 );
                 """
             )
+            columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(scrim_operations)")
+            }
+            if "fingerprint" not in columns:
+                conn.execute(
+                    "ALTER TABLE scrim_operations ADD COLUMN fingerprint TEXT NOT NULL DEFAULT ''"
+                )
 
     def _connect(self):
         conn = sqlite3.connect(self.path, timeout=30)
@@ -116,6 +126,7 @@ class ScrimRepository:
         self, *, guild_id: int, captain_id: int, name: str,
         roster: tuple[int, ...], substitutes: tuple[int, ...] = (),
         region: str, availability: str, operation_id: str,
+        manager_override: bool = False,
     ) -> ScrimTeam:
         name, region, availability = name.strip(), region.strip(), availability.strip()
         roster, substitutes = tuple(dict.fromkeys(roster)), tuple(dict.fromkeys(substitutes))
@@ -132,13 +143,23 @@ class ScrimRepository:
         team_id = uuid.uuid5(
             uuid.NAMESPACE_URL, f"godforge:scrim-team:{guild_id}:{name.casefold()}"
         ).hex[:12]
+        fingerprint = self._fingerprint(
+            guild_id, captain_id, name, roster, substitutes, region, availability
+        )
         with self._transaction() as conn:
+            existing = conn.execute(
+                "SELECT captain_id FROM scrim_teams WHERE team_id=?", (team_id,)
+            ).fetchone()
+            if existing and existing["captain_id"] != captain_id and not manager_override:
+                raise ScrimError("only the stored captain or a server manager can update this team")
             prior = conn.execute(
-                "SELECT entity_id FROM scrim_operations WHERE operation_id=?",
+                "SELECT entity_id,fingerprint FROM scrim_operations WHERE operation_id=?",
                 (operation_id,),
             ).fetchone()
-            if prior and prior["entity_id"] != team_id:
-                raise ScrimError("operation ID was already used for another team")
+            if prior and (
+                prior["entity_id"] != team_id or prior["fingerprint"] != fingerprint
+            ):
+                raise ScrimError("operation ID was already used with different team data")
             conn.execute(
                 """INSERT INTO scrim_teams VALUES (?,?,?,?,?,?,?,?)
                    ON CONFLICT(team_id) DO UPDATE SET
@@ -149,8 +170,8 @@ class ScrimRepository:
                  json.dumps(substitutes), region, availability),
             )
             conn.execute(
-                "INSERT OR IGNORE INTO scrim_operations VALUES (?,?,?)",
-                (operation_id, "save_team", team_id),
+                "INSERT OR IGNORE INTO scrim_operations VALUES (?,?,?,?)",
+                (operation_id, "save_team", team_id, fingerprint),
             )
         return self.get_team(team_id)
 
@@ -189,6 +210,13 @@ class ScrimRepository:
                 uuid.NAMESPACE_URL,
                 f"godforge:scrim-challenge:{challenger['guild_id']}:{operation_id}",
             ).hex[:12]
+            fingerprint = self._fingerprint(
+                challenger_team_id, recipient_team_id, actor_id,
+                starts_at.isoformat(), timezone_name
+            )
+            self._record_operation(
+                conn, operation_id, "challenge", challenge_id, fingerprint
+            )
             conn.execute(
                 """INSERT OR IGNORE INTO scrim_challenges
                    (challenge_id,guild_id,challenger_team_id,recipient_team_id,
@@ -198,7 +226,6 @@ class ScrimRepository:
                  recipient_team_id, starts_at.isoformat(), timezone_name, actor_id,
                  ChallengeState.PROPOSED),
             )
-            self._record_operation(conn, operation_id, "challenge", challenge_id)
         return self.get_challenge(challenge_id)
 
     def respond(
@@ -210,11 +237,18 @@ class ScrimRepository:
             raise ScrimError("response must be accept, reject, or propose")
         with self._transaction() as conn:
             row = self._required_challenge(conn, challenge_id)
+            fingerprint = self._fingerprint(
+                challenge_id, actor_id, response,
+                ensure_utc(proposed_at).isoformat() if proposed_at else None,
+            )
+            self._record_operation(
+                conn, operation_id, "respond", challenge_id, fingerprint
+            )
             recipient = self._required_team(conn, row["recipient_team_id"])
             if recipient["captain_id"] != actor_id:
                 raise ScrimError("only the challenged captain can respond")
             if row["state"] != ChallengeState.PROPOSED:
-                self._record_operation(conn, operation_id, "respond", challenge_id)
+                pass
             elif response == "propose":
                 if proposed_at is None or ensure_utc(proposed_at) <= datetime.now(timezone.utc):
                     raise ScrimError("a proposed replacement time must be in the future")
@@ -230,29 +264,37 @@ class ScrimRepository:
                     "UPDATE scrim_challenges SET state=? WHERE challenge_id=?",
                     (state, challenge_id),
                 )
-            self._record_operation(conn, operation_id, "respond", challenge_id)
         return self.get_challenge(challenge_id)
 
     def check_in(self, challenge_id: str, *, actor_id: int, operation_id: str) -> ScrimChallenge:
         with self._transaction() as conn:
             row = self._required_challenge(conn, challenge_id)
-            if row["state"] not in (ChallengeState.ACCEPTED, ChallengeState.CHECKED_IN):
+            replayed = self._record_operation(
+                conn, operation_id, "check_in", challenge_id,
+                self._fingerprint(challenge_id, actor_id),
+            )
+            if replayed:
+                pass
+            elif row["state"] not in (ChallengeState.ACCEPTED, ChallengeState.CHECKED_IN):
                 raise ScrimError("only accepted challenges can check in")
-            teams = [
+            else:
+                teams = [
                 self._required_team(conn, row["challenger_team_id"]),
                 self._required_team(conn, row["recipient_team_id"]),
-            ]
-            team = next((item for item in teams if item["captain_id"] == actor_id), None)
-            if team is None:
-                raise ScrimError("only a participating captain can check in")
-            checked = set(json.loads(row["checked_in_json"]))
-            checked.add(team["team_id"])
-            state = ChallengeState.CHECKED_IN if len(checked) == 2 else ChallengeState.ACCEPTED
-            conn.execute(
-                "UPDATE scrim_challenges SET checked_in_json=?,state=? WHERE challenge_id=?",
-                (json.dumps(sorted(checked)), state, challenge_id),
-            )
-            self._record_operation(conn, operation_id, "check_in", challenge_id)
+                ]
+                team = next((item for item in teams if item["captain_id"] == actor_id), None)
+                if team is None:
+                    raise ScrimError("only a participating captain can check in")
+                checked = set(json.loads(row["checked_in_json"]))
+                checked.add(team["team_id"])
+                state = (
+                    ChallengeState.CHECKED_IN
+                    if len(checked) == 2 else ChallengeState.ACCEPTED
+                )
+                conn.execute(
+                    "UPDATE scrim_challenges SET checked_in_json=?,state=? WHERE challenge_id=?",
+                    (json.dumps(sorted(checked)), state, challenge_id),
+                )
         return self.get_challenge(challenge_id)
 
     def lock_rosters(
@@ -261,20 +303,29 @@ class ScrimRepository:
     ) -> ScrimChallenge:
         with self._transaction() as conn:
             row = self._required_challenge(conn, challenge_id)
-            if row["state"] != ChallengeState.CHECKED_IN:
+            replayed = self._record_operation(
+                conn, operation_id, "lock", challenge_id,
+                self._fingerprint(challenge_id, actor_id, organizer_override),
+            )
+            if replayed:
+                pass
+            elif row["state"] != ChallengeState.CHECKED_IN:
                 raise ScrimError("both captains must check in before roster lock")
-            if actor_id != row["organizer_id"] and not organizer_override:
+            elif actor_id != row["organizer_id"] and not organizer_override:
                 raise ScrimError("only the organizer can lock rosters")
-            teams = (
-                self._required_team(conn, row["challenger_team_id"]),
-                self._required_team(conn, row["recipient_team_id"]),
-            )
-            snapshot = {team["team_id"]: json.loads(team["roster_json"]) for team in teams}
-            conn.execute(
-                "UPDATE scrim_challenges SET locked_rosters_json=?,state=? WHERE challenge_id=?",
-                (json.dumps(snapshot, sort_keys=True), ChallengeState.LOCKED, challenge_id),
-            )
-            self._record_operation(conn, operation_id, "lock", challenge_id)
+            else:
+                teams = (
+                    self._required_team(conn, row["challenger_team_id"]),
+                    self._required_team(conn, row["recipient_team_id"]),
+                )
+                snapshot = {
+                    team["team_id"]: json.loads(team["roster_json"]) for team in teams
+                }
+                conn.execute(
+                    """UPDATE scrim_challenges SET locked_rosters_json=?,state=?
+                       WHERE challenge_id=?""",
+                    (json.dumps(snapshot, sort_keys=True), ChallengeState.LOCKED, challenge_id),
+                )
         return self.get_challenge(challenge_id)
 
     def mark_launched(
@@ -282,6 +333,10 @@ class ScrimRepository:
     ) -> ScrimChallenge:
         with self._transaction() as conn:
             row = self._required_challenge(conn, challenge_id)
+            self._record_operation(
+                conn, operation_id, "launch", challenge_id,
+                self._fingerprint(challenge_id, event_id, lobby_id),
+            )
             if row["state"] not in (ChallengeState.LOCKED, ChallengeState.LAUNCHED):
                 raise ScrimError("lock rosters before launch")
             if row["lobby_id"] and row["lobby_id"] != lobby_id:
@@ -291,7 +346,6 @@ class ScrimRepository:
                    WHERE challenge_id=?""",
                 (ChallengeState.LAUNCHED, event_id, lobby_id, challenge_id),
             )
-            self._record_operation(conn, operation_id, "launch", challenge_id)
         return self.get_challenge(challenge_id)
 
     def get_challenge(self, challenge_id: str) -> ScrimChallenge | None:
@@ -310,6 +364,32 @@ class ScrimRepository:
             {key: tuple(value) for key, value in locked.items()} if locked else None,
             row["event_id"], row["lobby_id"],
         )
+
+    def get_challenge_by_lobby(self, guild_id: int, lobby_id: str) -> ScrimChallenge | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """SELECT challenge_id FROM scrim_challenges
+                   WHERE guild_id=? AND lobby_id=? AND state=?""",
+                (guild_id, lobby_id, ChallengeState.LAUNCHED),
+            ).fetchone()
+        return self.get_challenge(row["challenge_id"]) if row else None
+
+    def fixed_draft_teams(self, challenge: ScrimChallenge) -> tuple[DraftTeam, DraftTeam]:
+        """Return the exact locked challenger/recipient sides for canonical draft launch."""
+        if challenge.locked_rosters is None:
+            raise ScrimError("scrim rosters are not locked")
+        challenger = self.get_team(challenge.challenger_team_id)
+        recipient = self.get_team(challenge.recipient_team_id)
+        if challenger is None or recipient is None:
+            raise ScrimError("a locked scrim team no longer exists")
+
+        def side(team: ScrimTeam) -> DraftTeam:
+            ids = challenge.locked_rosters[team.team_id]
+            return DraftTeam(
+                team.captain_id, ids, tuple(zip(ids, SMITE_ROLES, strict=True))
+            )
+
+        return side(challenger), side(recipient)
 
     @staticmethod
     def _team(row) -> ScrimTeam:
@@ -336,17 +416,25 @@ class ScrimRepository:
         return row
 
     @staticmethod
-    def _record_operation(conn, operation_id, kind, entity_id):
+    def _record_operation(conn, operation_id, kind, entity_id, fingerprint):
         prior = conn.execute(
-            "SELECT kind,entity_id FROM scrim_operations WHERE operation_id=?",
+            "SELECT kind,entity_id,fingerprint FROM scrim_operations WHERE operation_id=?",
             (operation_id,),
         ).fetchone()
-        if prior and (prior["kind"], prior["entity_id"]) != (kind, entity_id):
-            raise ScrimError("operation ID was already used for another mutation")
+        if prior and (prior["kind"], prior["entity_id"], prior["fingerprint"]) != (
+            kind, entity_id, fingerprint
+        ):
+            raise ScrimError("operation ID was already used with different mutation data")
         conn.execute(
-            "INSERT OR IGNORE INTO scrim_operations VALUES (?,?,?)",
-            (operation_id, kind, entity_id),
+            "INSERT OR IGNORE INTO scrim_operations VALUES (?,?,?,?)",
+            (operation_id, kind, entity_id, fingerprint),
         )
+        return prior is not None
+
+    @staticmethod
+    def _fingerprint(*values) -> str:
+        payload = json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 async def launch_scrim(
@@ -360,6 +448,8 @@ async def launch_scrim(
         return parties.get(challenge.guild_id, challenge.lobby_id)
     teams = [scrims.get_team(challenge.challenger_team_id),
              scrims.get_team(challenge.recipient_team_id)]
+    if any(len(challenge.locked_rosters[team.team_id]) != 5 for team in teams):
+        raise ScrimError("competitive scrims require exactly five locked active players per team")
     members = tuple(
         user_id
         for team in teams

@@ -2186,6 +2186,7 @@ async def scrim_team_create(
             name=name, roster=active, substitutes=bench, region=region,
             availability=availability,
             operation_id=f"discord:{interaction.id}:scrim-team",
+            manager_override=bool(interaction.user.guild_permissions.manage_guild),
         )
     except ScrimError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
@@ -2344,10 +2345,19 @@ async def scrim_launch(interaction: discord.Interaction, challenge_id: str):
     except (ScrimError, ScheduleError, QueueError, ValueError) as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
-    await interaction.response.send_message(
-        content=f"Scrim `{challenge.challenge_id}` is now an ordinary GodForge lobby.",
-        embed=_lobby_card_embed(lobby), view=LobbyCardView(_handle_lobby_card_action),
-    )
+    queue = await party_queue_service.get(lobby.lobby_id)
+    if lobby.state is LobbyState.READY_CHECK and queue is not None:
+        await interaction.response.send_message(
+            content=" ".join(f"<@{member.user_id}>" for member in queue.active),
+            embed=_ready_check_embed(lobby.lobby_id, queue),
+            view=ReadyCheckView(_handle_ready_check_action),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
+        )
+    else:
+        await interaction.response.send_message(
+            content=f"Scrim `{challenge.challenge_id}` is now a GodForge lobby.",
+            embed=_lobby_card_embed(lobby), view=LobbyCardView(_handle_lobby_card_action),
+        )
 
 
 party_commands = app_commands.Group(
@@ -3273,12 +3283,18 @@ async def _launch_party_draft(
     launch = None
     draft_started = False
     try:
+        scrim = scrim_repository.get_challenge_by_lobby(
+            lobby.guild_id, lobby.lobby_id
+        )
         launch, should_start = party_draft_repository.begin(
             lobby,
             operation_id=f"discord:{interaction.id}:party-draft",
             channel_id=channel.id,
             match_id_factory=match_ids.reserve_match_id,
             formation_mode=formation_mode,
+            fixed_teams=(
+                scrim_repository.fixed_draft_teams(scrim) if scrim else None
+            ),
         )
         if not should_start:
             if launch.status == "active":

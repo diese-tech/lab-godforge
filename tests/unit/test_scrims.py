@@ -18,13 +18,13 @@ FUTURE = datetime.now(timezone.utc) + timedelta(days=7)
 
 def _teams(repo):
     alpha = repo.save_team(
-        guild_id=1, captain_id=1, name="Alpha", roster=(1, 2),
-        substitutes=(3,), region="NA East", availability="Weeknights",
+        guild_id=1, captain_id=1, name="Alpha", roster=(1, 2, 3, 7, 8),
+        substitutes=(9,), region="NA East", availability="Weeknights",
         operation_id="team-alpha",
     )
     beta = repo.save_team(
-        guild_id=1, captain_id=4, name="Beta", roster=(4, 5),
-        substitutes=(6,), region="NA East", availability="Saturdays",
+        guild_id=1, captain_id=4, name="Beta", roster=(4, 5, 6, 10, 11),
+        substitutes=(12,), region="NA East", availability="Saturdays",
         operation_id="team-beta",
     )
     return alpha, beta
@@ -45,6 +45,55 @@ def test_team_rosters_are_guild_scoped_durable_and_validated(tmp_path):
         repo.save_team(
             guild_id=1, captain_id=7, name="Overlap", roster=(7, 8),
             substitutes=(8,), region="EU", availability="Any", operation_id="overlap",
+        )
+
+
+def test_team_name_cannot_be_taken_over_without_manager_override(tmp_path):
+    repo = ScrimRepository(tmp_path / "party.db")
+    alpha, _ = _teams(repo)
+    with pytest.raises(ScrimError, match="stored captain"):
+        repo.save_team(
+            guild_id=1, captain_id=99, name="Alpha",
+            roster=(99, 20, 21, 22, 23), region="EU", availability="Any",
+            operation_id="takeover",
+        )
+    assert repo.get_team(alpha.team_id).captain_id == 1
+    transferred = repo.save_team(
+        guild_id=1, captain_id=99, name="Alpha",
+        roster=(99, 20, 21, 22, 23), region="EU", availability="Any",
+        operation_id="managed-transfer", manager_override=True,
+    )
+    assert transferred.captain_id == 99
+
+
+def test_operation_ids_reject_changed_team_and_challenge_payloads(tmp_path):
+    repo = ScrimRepository(tmp_path / "party.db")
+    alpha, beta = _teams(repo)
+    with pytest.raises(ScrimError, match="different team data"):
+        repo.save_team(
+            guild_id=1, captain_id=1, name="Alpha", roster=alpha.roster,
+            substitutes=alpha.substitutes, region=alpha.region,
+            availability="Changed", operation_id="team-alpha",
+        )
+    challenge = repo.challenge(
+        challenger_team_id=alpha.team_id, recipient_team_id=beta.team_id,
+        actor_id=1, starts_at=FUTURE, timezone_name="UTC",
+        operation_id="stable-challenge",
+    )
+    with pytest.raises(ScrimError, match="different mutation data"):
+        repo.challenge(
+            challenger_team_id=alpha.team_id, recipient_team_id=beta.team_id,
+            actor_id=1, starts_at=FUTURE + timedelta(hours=1), timezone_name="UTC",
+            operation_id="stable-challenge",
+        )
+    repo.respond(
+        challenge.challenge_id, actor_id=4, response="accept",
+        operation_id="stable-response",
+    )
+    with pytest.raises(ScrimError, match="different mutation data"):
+        repo.respond(
+            challenge.challenge_id, actor_id=4, response="reject",
+            operation_id="stable-response",
         )
 
 
@@ -114,7 +163,7 @@ async def test_checkin_lock_and_launch_reuse_canonical_pipeline(tmp_path):
         challenge.challenge_id, actor_id=1, operation_id="lock"
     )
     assert challenge.locked_rosters == {
-        alpha.team_id: (1, 2), beta.team_id: (4, 5)
+        alpha.team_id: (1, 2, 3, 7, 8), beta.team_id: (4, 5, 6, 10, 11)
     }
 
     schedules = ScheduleRepository(path)
@@ -126,8 +175,44 @@ async def test_checkin_lock_and_launch_reuse_canonical_pipeline(tmp_path):
     launched = scrims.get_challenge(challenge.challenge_id)
     assert launched.state is ChallengeState.LAUNCHED
     assert launched.lobby_id == lobby.lobby_id
-    assert {member.user_id for member in lobby.participants} == {1, 2, 4, 5}
+    assert {member.user_id for member in lobby.participants} == {
+        1, 2, 3, 4, 5, 6, 7, 8, 10, 11
+    }
     assert schedules.get(launched.event_id).lobby_id == lobby.lobby_id
+    blue, red = scrims.fixed_draft_teams(launched)
+    assert blue.participant_ids == alpha.roster
+    assert red.participant_ids == beta.roster
+    assert blue.captain_id == alpha.captain_id
+    assert red.captain_id == beta.captain_id
+
+
+@pytest.mark.asyncio
+async def test_launch_requires_five_unique_active_players_per_team(tmp_path):
+    path = tmp_path / "party.db"
+    scrims = ScrimRepository(path)
+    alpha, beta = _teams(scrims)
+    scrims.save_team(
+        guild_id=1, captain_id=1, name="Alpha", roster=(1, 2),
+        substitutes=(3, 7, 8), region="NA East", availability="Weeknights",
+        operation_id="shorten-alpha",
+    )
+    challenge = scrims.challenge(
+        challenger_team_id=alpha.team_id, recipient_team_id=beta.team_id,
+        actor_id=1, starts_at=FUTURE, timezone_name="UTC", operation_id="short-c",
+    )
+    scrims.respond(
+        challenge.challenge_id, actor_id=4, response="accept", operation_id="short-a"
+    )
+    scrims.check_in(challenge.challenge_id, actor_id=1, operation_id="short-i1")
+    scrims.check_in(challenge.challenge_id, actor_id=4, operation_id="short-i2")
+    locked = scrims.lock_rosters(
+        challenge.challenge_id, actor_id=1, operation_id="short-lock"
+    )
+    with pytest.raises(ScrimError, match="exactly five"):
+        await launch_scrim(
+            locked, scrims, ScheduleRepository(path), SQLitePartyRepository(path),
+            PartyQueueService(InMemoryPartyQueueRepository()), operation_id="short-launch",
+        )
 
 
 def test_roster_lock_is_a_snapshot_and_organizer_override_is_explicit(tmp_path):
@@ -149,4 +234,4 @@ def test_roster_lock_is_a_snapshot_and_organizer_override_is_explicit(tmp_path):
         substitutes=(2,), region="NA East", availability="Weeknights",
         operation_id="team-alpha-edit",
     )
-    assert locked.locked_rosters[alpha.team_id] == (1, 2)
+    assert locked.locked_rosters[alpha.team_id] == (1, 2, 3, 7, 8)

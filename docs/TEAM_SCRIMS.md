@@ -21,6 +21,8 @@ tournament or economy bot.
 Team edits after roster lock do not affect the match snapshot. Mutations use
 Discord interaction IDs and deterministic entity IDs so retries and restarts do
 not create duplicate teams, challenges, schedules, or lobbies.
+Launch requires exactly five unique active players on each locked team;
+substitutes remain registered but do not enter the match automatically.
 
 ## Commands
 
