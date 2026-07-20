@@ -25,6 +25,11 @@ REJECTED = [
     "6.7.8",
     "6-7-8",
     "version 1.6.7 released",
+    "version 1.67.0",
+    "10.67.0.1",
+    "id 6-67-8",
+    "6.67",
+    "build 2.67.3",
 ]
 
 
@@ -74,3 +79,8 @@ def test_empty_and_none_are_safe():
 def test_phone_like_and_id_strings_do_not_match():
     assert matcher.is_qualifying("call 555-6-7-890") is False
     assert matcher.is_qualifying("id 4670015") is False
+
+
+def test_sentence_ending_period_after_67_still_matches():
+    assert matcher.is_qualifying("it's 67.") is True
+    assert matcher.is_qualifying("got there, 67!") is True

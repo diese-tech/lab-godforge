@@ -52,9 +52,13 @@ def strip_ignored(text: str) -> str:
 # Matching: standalone 67 references with strict boundaries.
 # ---------------------------------------------------------------------------
 
-# Bare "67" — no letter/digit/underscore may touch either side. This rejects
-# 167, 670, abc67, 67abc, and 67th.
-_BARE = re.compile(r"(?<![\w])67(?![\w])")
+# Bare "67" — no letter/digit/underscore may touch either side (rejects 167,
+# 670, abc67, 67abc, 67th). Additionally reject a "67" embedded in a longer
+# dotted/dashed/slashed numeric run such as 1.67.0, 10.67.0.1, or 6-67-8: a
+# separator flanked by another digit means it is a version/IP/ID, not a
+# standalone reference. A trailing sentence period ("it's 67.") is still fine
+# because the period is not followed by a digit.
+_BARE = re.compile(r"(?<![\w])(?<!\d[.\-/])67(?![\w])(?![.\-/]\d)")
 
 # Separated numeric forms "6<sep>7" with sep in { space, '.', '-', '/' }.
 # Neighboring letters, digits, underscores, or *separators* are rejected, so a

@@ -1207,8 +1207,10 @@ async def _handle_r67_command(message: discord.Message):
     All branching and business logic lives in ``R67Service``; this boundary only
     extracts Discord inputs and delivers the returned text.
     """
-    args = message.content[1:].split(" ", 1)
-    remainder = args[1].strip().lower() if len(args) > 1 else ""
+    # Split on arbitrary whitespace so ".r67\nstatus" or ".r67\tstatus" parse the
+    # same as ".r67 status" (matches the whitespace-aware first-token detection).
+    parts = message.content[1:].split(maxsplit=1)
+    remainder = parts[1].strip().lower() if len(parts) > 1 else ""
     guild_id = message.guild.id if message.guild else None
     reply = r67_service.handle_command(
         guild_id,
