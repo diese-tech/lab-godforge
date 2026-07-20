@@ -74,7 +74,7 @@ from utils.scrims import (
     launch_scrim,
 )
 from utils.r67.repository import SQLiteR67Repository
-from utils.r67.service import R67Service
+from utils.r67.service import R67Service, build_survivor_announcement
 from utils.match_history import (
     MatchHistoryRepository,
     MatchOutcome,
@@ -1282,7 +1282,7 @@ async def _run_r67_survivor_event(message: discord.Message, winners: list[int]):
         message.channel.id,
         marked,
     )
-    announcement = r67_service.build_survivor_announcement(winners, marked)
+    announcement = build_survivor_announcement(winners, marked)
     try:
         await message.channel.send(
             announcement,
