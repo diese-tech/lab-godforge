@@ -11,6 +11,9 @@ venv/
 *.db-shm
 *.db-wal
 
+# Runtime-generated match-id counter state (written during runs/tests)
+data/match_ids.json
+
 # Editor
 .vscode/
 .idea/
