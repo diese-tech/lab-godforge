@@ -214,6 +214,17 @@ class PartyDraftLaunchRepository:
             ).fetchone()
             return _decode(row) if row else None
 
+    def get_by_match_id(
+        self, guild_id: int, match_id: str
+    ) -> PartyDraftLaunch | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM party_draft_launches "
+                "WHERE guild_id=? AND match_id=?",
+                (guild_id, match_id),
+            ).fetchone()
+            return _decode(row) if row else None
+
     def _finish(
         self,
         lobby_id: str,

@@ -146,6 +146,35 @@ class DiscordMatchRoomOperations:
                     reason="Removed from GodForge lobby",
                 )
 
+    async def sync_participants(
+        self,
+        resource_ids: tuple[int, ...],
+        participant_ids: tuple[int, ...],
+        removed_ids: tuple[int, ...],
+        locked: bool,
+    ) -> None:
+        for user_id in removed_ids:
+            await self.remove_player(resource_ids, user_id)
+        for resource_id in resource_ids:
+            channel = self.guild.get_channel(resource_id)
+            if channel is None:
+                continue
+            for user_id in participant_ids:
+                member = self.guild.get_member(user_id)
+                if member is None:
+                    continue
+                await channel.set_permissions(
+                    member,
+                    overwrite=discord.PermissionOverwrite(
+                        view_channel=True,
+                        read_message_history=True,
+                        send_messages=not locked,
+                        connect=not locked,
+                        speak=not locked,
+                    ),
+                    reason="GodForge continuity roster reconciliation",
+                )
+
     async def transfer_organizer(
         self,
         resource_ids: tuple[int, ...],

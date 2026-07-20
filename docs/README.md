@@ -11,6 +11,8 @@ Use these files as the canonical sources:
   results, recent-match views, and recreational game-night statistics.
 - [`SCHEDULED_CUSTOM_NIGHTS.md`](SCHEDULED_CUSTOM_NIGHTS.md) - timezone-safe
   custom nights, reminders, ICS export, and live-lobby conversion.
+- [`MATCH_CONTINUITY.md`](MATCH_CONTINUITY.md) - idempotent rematches,
+  shuffles, substitutes, queue returns, and series continuation.
 - [`../VERSION_HISTORY.md`](../VERSION_HISTORY.md) — released and candidate
   milestones.
 - [`../RELEASE_PROCESS.md`](../RELEASE_PROCESS.md) — release gates and tagging.
