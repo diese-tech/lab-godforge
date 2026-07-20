@@ -59,7 +59,9 @@ Admin-only dashboard actions require `GODFORGE_ADMIN_PASSWORD` when using `web_a
 After login, the Overview panel includes bot status, guild count, active draft
 rooms, a managed-server selector grid, module health, and recent admin activity.
 
-The Settings module now saves temporary guild defaults to `data/guild_settings.json`: feature toggles, channel names, and admin/captain role labels. This is the staging surface for the future Discord OAuth server picker and database-backed guild settings.
+The Settings module saves temporary guild defaults to
+`data/guild_settings.json`. It is a staging surface until Discord guild
+permissions and durable per-guild configuration are complete.
 
 The Command Config module saves temporary custom command configs to `data/custom_commands.json` or SQLite. Unknown dot commands in Discord can execute these configs with enabled state, channel gates, role gates, per-user cooldowns, and mention suppression.
 
