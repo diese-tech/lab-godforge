@@ -1,9 +1,12 @@
 # GodForge Standalone Product Plan
 
-Status: approved and in implementation (`v2.3.0-rc.1`)
+Status: implementation complete; live validation pending (`v2.3.0-rc.2`)
 Last updated: July 20, 2026
 
 ## Implementation tracker
+
+All linked implementation issues are merged. This tracker remains as the
+durable map from product intent to repository history.
 
 - Foundation: [#18](https://github.com/diese-tech/lab-godforge/issues/18)
   durable lobby lifecycle and

@@ -53,11 +53,8 @@ Latest stable release. Historical scope:
 
 ## v2.3.0 - Standalone Party Foundation
 
-Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
-
-- Guild-scoped premade team rosters, substitutes, regions, and availability.
-- Durable captain scrim challenges with counterproposals, check-in, organizer
-  roster locks, and launch through the canonical party workflow.
+Current release candidate (`v2.3.0-rc.2`). The implementation scope is
+complete; live Discord and Railway validation remain before the stable tag.
 
 - **Standalone product boundary**: normal GodForge workflows and help surfaces no
   longer require or advertise a companion service.
@@ -101,9 +98,15 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
   timezone, retain role-aware RSVPs and waitlists, send durable reminders,
   export portable ICS files, and convert idempotently into the existing lobby
   and ready-check workflow.
+- **Match continuity**: completed matches offer durable run-it-back, shuffle,
+  requeue, substitute, and series actions that replay interrupted projections,
+  reconcile rooms, and publish the next result workflow.
+- **Premade teams and scrims**: guild-scoped rosters, substitutes, regions,
+  availability, captain challenges, counterproposals, check-in, locked sides,
+  and canonical party/draft/result launch work without a tournament engine.
 
 ## Future Version Gates
 
-- `v2.3`: Complete zero-config guild setup and managed cosmetic roles, then
-  validate the standalone foundation in a live Discord guild.
+- `v2.3`: Feature scope is complete at `rc.2`; validate setup, recovery,
+  permissions, Railway health, and the public tools surface before tagging.
 - `v3.0`: Full dual-use platform milestone with standalone web users and production-grade assets.
