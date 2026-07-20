@@ -60,6 +60,9 @@ Comparable Discord products validate several expectations:
 
 - Modern LFG flows use buttons, forms, and browsable lobby cards rather than
   requiring users to memorize commands.
+- NeatQueue validates a persistent queue that remains available across matches,
+  a guided `/setup`, multiple team-selection modes, ready-up choices, temporary
+  rooms, winner voting, rematches, and a safe test mode.
 - Temporary text and voice rooms with automatic cleanup are table stakes.
 - Ready checks, capacity limits, waitlists, and substitute promotion prevent
   no-shows from collapsing an event.
@@ -117,8 +120,27 @@ Complete this before promoting GodForge to unrelated servers.
 - Complete Discord OAuth guild permission verification.
 - Require Manage Guild or a configured organizer role for administration.
 - Detect whether GodForge is installed and provide the correct invite flow.
-- Configure the lobby panel channel, temporary-room category,
-  organizer/captain roles, region, and default rules.
+- Provide a guided `/setup` that creates or reuses the lobby panel channel,
+  temporary-room category, organizer/captain roles, region, and default rules.
+- Detect naming and permission conflicts before changing existing server
+  resources.
+- Provide a test mode with shortened timers, solo fill, and no persistent match
+  statistics so administrators can verify the complete lifecycle.
+
+#### Managed cosmetic roles
+
+- Create permissionless GodForge roles for Solo, Jungle, Mid, Support, and ADC.
+- Optionally create captain, substitute, region, and LFG-notification roles.
+- Store returned Discord role IDs per guild; names are display metadata, not
+  identity.
+- Publish a persistent self-assignment panel that adds and removes roles.
+- Reuse roles by stored ID, tolerate renames, and recreate explicitly deleted
+  managed roles.
+- Diagnose when GodForge lacks Manage Roles or sits below a managed role.
+- Never adopt or delete an administrator-created role based only on a matching
+  name.
+- Keep database-backed matchmaking preferences authoritative. Discord roles
+  remain the visible, cosmetic projection of those preferences.
 
 #### Scope cleanup
 
@@ -152,6 +174,10 @@ An administrator runs `/party setup` once. GodForge posts a durable panel with:
 
 The panel survives individual lobby cleanup and can be refreshed without
 duplication.
+
+The queue itself is persistent and reusable across matches. Completing or
+cancelling one match returns the panel to an available state rather than
+requiring staff to recreate it.
 
 #### Lobby creation and discovery
 
@@ -319,16 +345,17 @@ Each tracker issue should be a thin, independently verifiable vertical slice.
 
 1. Establish the party-lobby domain model, durable state, and recovery path.
 2. Complete permission-safe guild setup and publish a persistent Play panel.
-3. Deliver create, browse, join, leave, and preference flows.
-4. Add capacity, waitlist, compatible substitute promotion, and ready checks.
-5. Create and reconcile temporary party/team rooms.
-6. Convert a ready lobby into the existing fearless draft.
-7. Add standalone result confirmation and match history.
-8. Add role-aware balance and captains-based player drafting.
-9. Add rematch, shuffle, substitute, and re-queue actions.
-10. Add scheduled sessions that convert into live lobbies.
-11. Add team rosters and scrim challenges.
-12. Isolate and feature-gate the optional ForgeLens adapter.
+3. Provision and reconcile self-assignable GodForge cosmetic roles.
+4. Deliver create, browse, join, leave, and preference flows.
+5. Add capacity, waitlist, compatible substitute promotion, and ready checks.
+6. Create and reconcile temporary party/team rooms.
+7. Convert a ready lobby into the existing fearless draft.
+8. Add standalone result confirmation and match history.
+9. Add role-aware balance and captains-based player drafting.
+10. Add rematch, shuffle, substitute, and re-queue actions.
+11. Add scheduled sessions that convert into live lobbies.
+12. Add team rosters and scrim challenges.
+13. Isolate and feature-gate the optional ForgeLens adapter.
 
 New Discord interactions should be extracted from the already-large `bot.py`.
 Use a Discord adapter/cog layer over pure party, balancing, and match services.
