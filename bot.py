@@ -74,6 +74,7 @@ from utils.scrims import (
     launch_scrim,
 )
 from utils.lifecycle import FeatureRegistry, LifecycleContext
+from utils.routing import CommandRegistry
 from utils.r67.feature import R67Feature
 from utils.r67.repository import SQLiteR67Repository
 from utils.r67.service import R67Service, build_survivor_announcement
@@ -171,6 +172,11 @@ feature_registry.register(R67Feature(r67_service))
 
 def _lifecycle_context() -> LifecycleContext:
     return LifecycleContext(get_guild=client.get_guild)
+
+
+# Shared dot-command routing seam (Issue #48). Features register the exact
+# command token(s) they own; on_message resolves them in one lookup.
+command_registry = CommandRegistry()
 
 # Track metadata for reaction-enabled messages (sessions only).
 _tracked_messages = {}
@@ -534,16 +540,11 @@ async def on_message(message: discord.Message):
         await _handle_r67_passive(message)
         return
 
-    # ---- Deprecated economy commands (bypass parser — not handled there) ----
+    # ---- Feature-registered exact-token commands (see utils/routing) ----
     _first = message.content[1:].split()[0].lower() if message.content[1:].split() else ""
-    if _first in {"match", "bet", "wallet", "ledger"}:
-        await _handle_deprecated_economy_command(message, _first)
-        return
-    # ---- End deprecated economy routing ----
-
-    # ---- `.r67` command family (feature-owned; see utils/r67) ----
-    if _first == "r67":
-        await _handle_r67_command(message)
+    _command_handler = command_registry.resolve(_first)
+    if _command_handler is not None:
+        await _command_handler(message)
         return
 
     intent = parser.parse(message.content)
@@ -1299,6 +1300,18 @@ async def _handle_deprecated_economy_command(message: discord.Message, command: 
         "Economy, wallets, ledgers, and betting are not available in standalone "
         "GodForge. Use GodForge for parties, randomizers, sessions, and drafts."
     )
+
+
+async def _deprecated_economy_entry(message: discord.Message):
+    """Registry entry point for deprecated economy tokens."""
+    command = message.content[1:].split()[0].lower()
+    await _handle_deprecated_economy_command(message, command)
+
+
+# Feature-owned command registration (Issue #48). Each feature declares the exact
+# dot-command tokens it owns; on_message resolves them through command_registry.
+command_registry.register(("match", "bet", "wallet", "ledger"), _deprecated_economy_entry)
+command_registry.register(("r67",), _handle_r67_command)
 
 
 async def _handle_custom_command(message: discord.Message, trigger: str) -> bool:
