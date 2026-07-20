@@ -73,6 +73,8 @@ from utils.scrims import (
     ScrimRepository,
     launch_scrim,
 )
+from utils.r67.repository import SQLiteR67Repository
+from utils.r67.service import R67Service
 from utils.match_history import (
     MatchHistoryRepository,
     MatchOutcome,
@@ -155,6 +157,8 @@ match_continuity_repository = MatchContinuityRepository(_PARTY_DB_PATH)
 match_room_repository = SQLiteMatchRoomRepository(_PARTY_DB_PATH)
 schedule_repository = ScheduleRepository(_PARTY_DB_PATH)
 scrim_repository = ScrimRepository(_PARTY_DB_PATH)
+r67_repository = SQLiteR67Repository(_PARTY_DB_PATH)
+r67_service = R67Service(r67_repository)
 forgelens_adapter = ForgeLensAdapter()
 
 # Track metadata for reaction-enabled messages (sessions only).
@@ -518,6 +522,11 @@ async def on_message(message: discord.Message):
         await _handle_deprecated_economy_command(message, _first)
         return
     # ---- End deprecated economy routing ----
+
+    # ---- `.r67` command family (feature-owned; see utils/r67) ----
+    if _first == "r67":
+        await _handle_r67_command(message)
+        return
 
     intent = parser.parse(message.content)
     if intent is None:
@@ -1175,6 +1184,35 @@ def _is_admin(message: discord.Message) -> bool:
     member = message.author
     perms = getattr(member, "guild_permissions", None)
     return bool(perms and perms.administrator)
+
+
+def _can_manage_guild(message: discord.Message) -> bool:
+    """True if the author may manage guild-level r67 settings.
+
+    Discord's ``Manage Guild`` permission (or Administrator, which implies it)
+    is required per Issue #47 (Gate 4); the bot owner is always allowed.
+    """
+    if getattr(message.author, "id", None) == _GOD_USER_ID:
+        return True
+    perms = getattr(message.author, "guild_permissions", None)
+    return bool(perms and (getattr(perms, "manage_guild", False) or perms.administrator))
+
+
+async def _handle_r67_command(message: discord.Message):
+    """Thin adapter: parse the `.r67` command and send the service reply.
+
+    All branching and business logic lives in ``R67Service``; this boundary only
+    extracts Discord inputs and delivers the returned text.
+    """
+    args = message.content[1:].split(" ", 1)
+    remainder = args[1].strip().lower() if len(args) > 1 else ""
+    guild_id = message.guild.id if message.guild else None
+    reply = r67_service.handle_command(
+        guild_id,
+        remainder,
+        can_manage_guild=_can_manage_guild(message),
+    )
+    await message.channel.send(reply)
 
 
 async def _handle_deprecated_economy_command(message: discord.Message, command: str):
