@@ -22,17 +22,27 @@ import re
 
 import aiohttp
 import discord
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
-from utils import custom_commands, formatter, loader, parser, picker
+from utils import custom_commands, formatter, loader, parser, picker, settings
 from utils.formatter import NUMBER_EMOJIS
 from utils.resolver import resolve_god_name
 from utils.session import SessionManager
 from utils.draft import DraftManager
 from utils.forgelens_adapter import ForgeLensAdapter, forgelens_enabled
 from utils.party_store import SQLitePartyRepository
+from utils.party import LobbyState, Participant
+from utils.guild_setup import (
+    GuildSetupService,
+    PermissionSnapshot,
+    SetupOperationError,
+    SetupReferences,
+)
+from utils.managed_roles import ManagedRoleError, reconcile as reconcile_roles, set_member_role
+from utils.setup_views import PlayPanelView, RolePreferencesView
 from utils import ledger as ledger_utils
 from utils import wallet as wallet_utils
 
@@ -64,7 +74,20 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
 intents.members = True
-client = discord.Client(intents=intents)
+
+
+class GodForgeClient(discord.Client):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.tree = app_commands.CommandTree(self)
+
+    async def setup_hook(self):
+        self.add_view(PlayPanelView(_handle_play_panel_action))
+        self.add_view(RolePreferencesView(_handle_role_preference))
+        await self.tree.sync()
+
+
+client = GodForgeClient(intents=intents)
 
 sessions = SessionManager()
 drafts = DraftManager()
@@ -1779,6 +1802,344 @@ async def update_betting_embed(notify_channel: discord.abc.Messageable | None = 
     ledger_utils.update_embed_info(msg.id, BETTING_LEDGER_CHANNEL_ID)
     log.info(f"Betting ledger embed posted to channel {BETTING_LEDGER_CHANNEL_ID}")
     return True
+
+
+class _DiscordGuildSetupOperations:
+    def __init__(self, guild: discord.Guild):
+        self.guild = guild
+
+    async def guild_permissions(self) -> PermissionSnapshot:
+        permissions = self.guild.me.guild_permissions
+        return PermissionSnapshot(manage_channels=permissions.manage_channels)
+
+    async def channel_permissions(self, channel_id: int) -> PermissionSnapshot:
+        channel = self.guild.get_channel(channel_id)
+        if channel is None:
+            return PermissionSnapshot()
+        permissions = channel.permissions_for(self.guild.me)
+        return PermissionSnapshot(
+            view_channel=permissions.view_channel,
+            send_messages=permissions.send_messages,
+            embed_links=permissions.embed_links,
+            read_message_history=permissions.read_message_history,
+            manage_channels=permissions.manage_channels,
+        )
+
+    async def channel_exists(self, channel_id: int) -> bool:
+        return self.guild.get_channel(channel_id) is not None
+
+    async def message_exists(self, channel_id: int, message_id: int) -> bool:
+        channel = self.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        try:
+            await channel.fetch_message(message_id)
+        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+            return False
+        return True
+
+    async def create_play_channel(self) -> int:
+        conflict = discord.utils.get(self.guild.text_channels, name="godforge-play")
+        if conflict is not None:
+            raise SetupOperationError(
+                "channel_name_conflict",
+                "A channel named #godforge-play already exists but is not managed "
+                "by GodForge. Rename it or explicitly adopt it before retrying.",
+            )
+        channel = await self.guild.create_text_channel(
+            "godforge-play",
+            reason="GodForge zero-config setup",
+        )
+        return channel.id
+
+    async def create_play_panel(self, channel_id: int) -> int:
+        channel = self.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            raise SetupOperationError(
+                "invalid_play_channel",
+                "The stored GodForge Play channel is not a text channel.",
+            )
+        message = await channel.send(
+            embed=_play_panel_embed(),
+            view=PlayPanelView(_handle_play_panel_action),
+        )
+        return message.id
+
+    async def refresh_play_panel(self, channel_id: int, message_id: int) -> None:
+        channel = self.guild.get_channel(channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            raise SetupOperationError(
+                "invalid_play_channel",
+                "The stored GodForge Play channel is not a text channel.",
+            )
+        message = await channel.fetch_message(message_id)
+        await message.edit(
+            embed=_play_panel_embed(),
+            view=PlayPanelView(_handle_play_panel_action),
+        )
+
+
+def _play_panel_embed() -> discord.Embed:
+    return discord.Embed(
+        title="Play SMITE with GodForge",
+        description=(
+            "Create or join a reusable party lobby, browse active groups, or "
+            "set the roles you prefer to play."
+        ),
+        color=0x3498DB,
+    )
+
+
+async def _ensure_room_category(
+    guild: discord.Guild,
+    stored_category_id: str,
+) -> int:
+    if stored_category_id:
+        category = guild.get_channel(int(stored_category_id))
+        if isinstance(category, discord.CategoryChannel):
+            return category.id
+    conflict = discord.utils.get(guild.categories, name="GodForge Rooms")
+    if conflict is not None:
+        raise SetupOperationError(
+            "category_name_conflict",
+            "A category named GodForge Rooms already exists but is not managed "
+            "by GodForge. Rename it or explicitly adopt it before retrying.",
+        )
+    return (
+        await guild.create_category(
+            "GodForge Rooms",
+            reason="GodForge temporary party rooms",
+        )
+    ).id
+
+
+party_commands = app_commands.Group(
+    name="party",
+    description="Set up and manage GodForge parties",
+)
+client.tree.add_command(party_commands)
+
+
+@party_commands.command(name="setup", description="Set up GodForge for this server")
+@app_commands.describe(
+    test_mode="Use short-lived lobbies without recording match history",
+    captain_role="Create an optional self-assignable captain role",
+    substitute_role="Create an optional substitute role",
+    region_role="Create an optional region role",
+    lfg_role="Create an optional LFG notification role",
+)
+async def party_setup(
+    interaction: discord.Interaction,
+    test_mode: bool = False,
+    captain_role: bool = False,
+    substitute_role: bool = False,
+    region_role: bool = False,
+    lfg_role: bool = False,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message(
+            "Run this command inside a Discord server.",
+            ephemeral=True,
+        )
+        return
+    if not getattr(interaction.user.guild_permissions, "manage_guild", False):
+        await interaction.response.send_message(
+            "You need Manage Server to configure GodForge.",
+            ephemeral=True,
+        )
+        return
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    guild = interaction.guild
+    current = settings.get_guild_settings(str(guild.id))
+    managed = current["managed"]
+    try:
+        enabled_role_keys = ["solo", "jungle", "mid", "support", "adc"]
+        enabled_role_keys.extend(
+            key
+            for key, enabled in (
+                ("captain", captain_role),
+                ("substitute", substitute_role),
+                ("region", region_role),
+                ("lfg", lfg_role),
+            )
+            if enabled
+        )
+        role_result = await reconcile_roles(
+            guild,
+            managed["roleIds"],
+            enabled_keys=enabled_role_keys,
+        )
+        category_id = await _ensure_room_category(
+            guild,
+            managed.get("roomCategoryId", ""),
+        )
+        setup_result = await GuildSetupService(
+            _DiscordGuildSetupOperations(guild)
+        ).reconcile(
+            SetupReferences(
+                int(managed["playChannelId"]) if managed["playChannelId"] else None,
+                int(managed["playMessageId"]) if managed["playMessageId"] else None,
+            )
+        )
+    except (ManagedRoleError, SetupOperationError, discord.DiscordException) as exc:
+        await interaction.followup.send(str(exc), ephemeral=True)
+        return
+    if not setup_result.ok:
+        await interaction.followup.send(setup_result.message, ephemeral=True)
+        return
+    settings.update_guild_settings(
+        str(guild.id),
+        {
+            "managed": {
+                "playChannelId": str(setup_result.references.panel_channel_id),
+                "playMessageId": str(setup_result.references.panel_message_id),
+                "roomCategoryId": str(category_id),
+                "roleIds": {
+                    key: str(role_id)
+                    for key, role_id in role_result.role_ids.items()
+                },
+                "testMode": test_mode,
+            }
+        },
+        updated_by=f"discord:{interaction.user.id}",
+    )
+    created_roles = ", ".join(role_result.created_keys) or "none"
+    await interaction.followup.send(
+        f"GodForge Play is ready. Created roles: {created_roles}. "
+        f"Test mode: {'on' if test_mode else 'off'}.",
+        ephemeral=True,
+    )
+
+
+async def _handle_play_panel_action(
+    interaction: discord.Interaction,
+    action: str,
+) -> None:
+    if interaction.guild is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    guild_id = interaction.guild.id
+    if action == "preferences":
+        preferences = party_repository.get_player_preferences(
+            guild_id,
+            interaction.user.id,
+        )
+        selected = ", ".join(preferences) or "none yet"
+        await interaction.response.send_message(
+            f"Your role preferences: **{selected}**. Toggle them below.",
+            view=RolePreferencesView(_handle_role_preference),
+            ephemeral=True,
+        )
+        return
+    active = [
+        record.lobby
+        for record in party_repository.recover_active(guild_id)
+        if record.lobby.state in {LobbyState.OPEN, LobbyState.FULL}
+    ]
+    if action == "browse":
+        description = "\n".join(
+            f"`{lobby.lobby_id[:8]}` — {len(lobby.participants)}/{lobby.capacity} "
+            f"({lobby.state.value})"
+            for lobby in active
+        ) or "No party lobbies are open yet."
+        await interaction.response.send_message(description, ephemeral=True)
+        return
+    if action == "create":
+        guild_settings = settings.get_guild_settings(str(guild_id))
+        test_mode = guild_settings["managed"].get("testMode", False)
+        lobby = party_repository.create(
+            guild_id=guild_id,
+            organizer_id=interaction.user.id,
+            capacity=2 if test_mode else 10,
+            expires_at=datetime.now(timezone.utc)
+            + timedelta(minutes=10 if test_mode else 120),
+            operation_id=f"discord:{interaction.id}:create",
+        )
+        preferences = party_repository.get_player_preferences(
+            guild_id,
+            interaction.user.id,
+        )
+        lobby = party_repository.save_participant(
+            guild_id,
+            lobby.lobby_id,
+            Participant(interaction.user.id, preferences),
+            operation_id=f"discord:{interaction.id}:organizer",
+        )
+        await interaction.response.send_message(
+            f"Lobby `{lobby.lobby_id[:8]}` created "
+            f"({len(lobby.participants)}/{lobby.capacity}).",
+            ephemeral=True,
+        )
+        return
+    if action == "queue":
+        lobby = next(
+            (
+                candidate
+                for candidate in active
+                if candidate.state is LobbyState.OPEN
+                and len(candidate.participants) < candidate.capacity
+            ),
+            None,
+        )
+        if lobby is None:
+            await interaction.response.send_message(
+                "No open lobby has space. Create one instead.",
+                ephemeral=True,
+            )
+            return
+        preferences = party_repository.get_player_preferences(
+            guild_id,
+            interaction.user.id,
+        )
+        changed = party_repository.save_participant(
+            guild_id,
+            lobby.lobby_id,
+            Participant(interaction.user.id, preferences),
+            operation_id=f"discord:{interaction.id}:queue",
+        )
+        await interaction.response.send_message(
+            f"Joined `{changed.lobby_id[:8]}` "
+            f"({len(changed.participants)}/{changed.capacity}).",
+            ephemeral=True,
+        )
+
+
+async def _handle_role_preference(
+    interaction: discord.Interaction,
+    role_key: str,
+) -> None:
+    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    guild_id = interaction.guild.id
+    managed = settings.get_guild_settings(str(guild_id))["managed"]
+    stored_role_ids = managed["roleIds"]
+    role_id = int(stored_role_ids.get(role_key) or 0)
+    enabled = role_id not in {role.id for role in interaction.user.roles}
+    await set_member_role(
+        interaction.guild,
+        interaction.user,
+        role_key,
+        enabled,
+        stored_role_ids,
+    )
+    preferences = set(
+        party_repository.get_player_preferences(guild_id, interaction.user.id)
+    )
+    if enabled:
+        preferences.add(role_key)
+    else:
+        preferences.discard(role_key)
+    saved = party_repository.set_player_preferences(
+        guild_id,
+        interaction.user.id,
+        sorted(preferences),
+    )
+    await interaction.response.send_message(
+        f"{role_key.title()} {'added' if enabled else 'removed'}. "
+        f"Preferences: {', '.join(saved) or 'none'}.",
+        ephemeral=True,
+    )
 
 
 def main():

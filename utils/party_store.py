@@ -115,6 +115,13 @@ class SQLitePartyRepository:
               occurred_at TEXT NOT NULL,
               metadata_json TEXT NOT NULL DEFAULT '{}'
             );
+            CREATE TABLE IF NOT EXISTS party_player_preferences (
+              guild_id INTEGER NOT NULL,
+              user_id INTEGER NOT NULL,
+              preferences_json TEXT NOT NULL DEFAULT '[]',
+              updated_at TEXT NOT NULL,
+              PRIMARY KEY(guild_id, user_id)
+            );
             """
         )
 
@@ -373,6 +380,45 @@ class SQLitePartyRepository:
             )
             for row in rows
         ]
+
+    def get_player_preferences(self, guild_id: int, user_id: int) -> tuple[str, ...]:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT preferences_json FROM party_player_preferences "
+                "WHERE guild_id=? AND user_id=?",
+                (guild_id, user_id),
+            ).fetchone()
+        return tuple(json.loads(row["preferences_json"])) if row else ()
+
+    def set_player_preferences(
+        self,
+        guild_id: int,
+        user_id: int,
+        preferences: tuple[str, ...] | list[str],
+    ) -> tuple[str, ...]:
+        normalized = tuple(
+            dict.fromkeys(
+                str(preference).strip().lower()
+                for preference in preferences
+                if str(preference).strip()
+            )
+        )
+        with self._transaction() as conn:
+            conn.execute(
+                """INSERT INTO party_player_preferences
+                   (guild_id,user_id,preferences_json,updated_at)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(guild_id,user_id) DO UPDATE SET
+                     preferences_json=excluded.preferences_json,
+                     updated_at=excluded.updated_at""",
+                (
+                    guild_id,
+                    user_id,
+                    json.dumps(normalized),
+                    _encode_time(utc_now()),
+                ),
+            )
+        return normalized
 
     @staticmethod
     def _operation(conn, operation_id: str, fingerprint: str):

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from pathlib import Path
 
@@ -22,6 +23,25 @@ CHANNEL_KEYS = ("matchChannel", "bettingChannel", "adminChannel")
 ROLE_KEYS = ("adminRole", "captainRole")
 PERMISSION_KEYS = ("monetizeAccess",)
 TEXT_FIELDS = CHANNEL_KEYS + ROLE_KEYS
+MANAGED_RESOURCE_KEYS = (
+    "playChannelId",
+    "playMessageId",
+    "roomCategoryId",
+    "rolePanelChannelId",
+    "rolePanelMessageId",
+)
+MANAGED_ROLE_KEYS = (
+    "jungle",
+    "mid",
+    "adc",
+    "support",
+    "solo",
+    "captain",
+    "substitute",
+    "region",
+    "lfg",
+)
+_settings_lock = threading.RLock()
 
 
 def default_settings(guild_id: str = DEFAULT_GUILD_ID) -> dict:
@@ -44,6 +64,11 @@ def default_settings(guild_id: str = DEFAULT_GUILD_ID) -> dict:
         },
         "permissions": {
             "monetizeAccess": "none",
+        },
+        "managed": {
+            **{key: "" for key in MANAGED_RESOURCE_KEYS},
+            "roleIds": {key: "" for key in MANAGED_ROLE_KEYS},
+            "testMode": False,
         },
         "updated_at": None,
         "updated_by": None,
@@ -83,12 +108,38 @@ def get_guild_settings(guild_id: str = DEFAULT_GUILD_ID) -> dict:
     settings["channels"].update(_dict(saved.get("channels")))
     settings["roles"].update(_dict(saved.get("roles")))
     settings["permissions"].update(_dict(saved.get("permissions")))
+    settings["managed"].update(
+        {
+            key: value
+            for key, value in _dict(saved.get("managed")).items()
+            if key in MANAGED_RESOURCE_KEYS
+        }
+    )
+    settings["managed"]["roleIds"].update(
+        {
+            key: value
+            for key, value in _dict(_dict(saved.get("managed")).get("roleIds")).items()
+            if key in MANAGED_ROLE_KEYS
+        }
+    )
+    settings["managed"]["testMode"] = bool(
+        _dict(saved.get("managed")).get("testMode", False)
+    )
     settings["updated_at"] = saved.get("updated_at")
     settings["updated_by"] = saved.get("updated_by")
     return settings
 
 
 def update_guild_settings(guild_id: str, payload: dict, updated_by: str | None = None) -> dict:
+    with _settings_lock:
+        return _update_guild_settings(guild_id, payload, updated_by)
+
+
+def _update_guild_settings(
+    guild_id: str,
+    payload: dict,
+    updated_by: str | None = None,
+) -> dict:
     gid = _clean_guild_id(guild_id)
     current = get_guild_settings(gid)
 
@@ -111,6 +162,20 @@ def update_guild_settings(guild_id: str, payload: dict, updated_by: str | None =
                 {"none", "read", "manage"},
                 key,
             )
+
+    managed = _dict(payload.get("managed"))
+    for key in MANAGED_RESOURCE_KEYS:
+        if key in managed:
+            current["managed"][key] = _clean_discord_id(managed[key], key)
+    role_ids = _dict(managed.get("roleIds"))
+    for key in MANAGED_ROLE_KEYS:
+        if key in role_ids:
+            current["managed"]["roleIds"][key] = _clean_discord_id(
+                role_ids[key],
+                f"roleIds.{key}",
+            )
+    if "testMode" in managed:
+        current["managed"]["testMode"] = bool(managed["testMode"])
 
     current["updated_at"] = int(time.time())
     current["updated_by"] = _clean_label(updated_by or payload.get("updated_by") or "web-admin", "updated_by")
@@ -146,3 +211,10 @@ def _clean_choice(value, choices: set[str], field_name: str) -> str:
     if choice not in choices:
         raise ValueError(f"Invalid {field_name}")
     return choice
+
+
+def _clean_discord_id(value, field_name: str) -> str:
+    discord_id = str(value or "").strip()
+    if discord_id and (not discord_id.isdigit() or len(discord_id) > 20):
+        raise ValueError(f"Invalid {field_name}")
+    return discord_id

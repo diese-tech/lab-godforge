@@ -187,3 +187,18 @@ def test_full_lobby_rejects_additional_participant(tmp_path):
     repo.save_participant(1, "lobby", Participant(3), operation_id="join-2")
     with pytest.raises(ValueError, match="full"):
         repo.save_participant(1, "lobby", Participant(4), operation_id="join-3")
+
+
+def test_player_preferences_are_durable_and_guild_scoped(tmp_path):
+    repo = repository(tmp_path)
+
+    saved = repo.set_player_preferences(
+        1,
+        99,
+        ["Jungle", "mid", "jungle", ""],
+    )
+
+    assert saved == ("jungle", "mid")
+    restarted = SQLitePartyRepository(repo.path)
+    assert restarted.get_player_preferences(1, 99) == ("jungle", "mid")
+    assert restarted.get_player_preferences(2, 99) == ()

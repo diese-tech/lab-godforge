@@ -76,6 +76,19 @@ Important status notes:
 - Unknown dot commands can execute matching enabled custom command configs.
 - Custom commands support channel gates, simple role gates, cooldowns, and mention suppression.
 
+### Zero-Config Guild Setup
+
+- `/party setup` verifies permissions, creates the managed `#godforge-play`
+  channel and temporary-room category, publishes a persistent Play panel, and
+  stores the returned Discord IDs per guild.
+- Setup creates permissionless Solo, Jungle, Mid, Support, and ADC cosmetic
+  roles. Captain, Substitute, Region, and LFG roles are optional command flags.
+- Re-running setup refreshes stored resources without duplication. Matching
+  names are never silently adopted; conflicts produce a repair message.
+- The Play panel supports Create Lobby, Browse Lobbies, Join Queue, and My
+  Preferences. Preference buttons update both Discord roles and durable
+  GodForge player preferences.
+
 ## Architecture / System Flow
 
 ```mermaid

@@ -284,6 +284,10 @@ def format_help_page2() -> discord.Embed:
         "Start with `.draft start @blue @red`, then captains use `.ban` and `.pick`.\n"
         "Use `.draft show`, `.draft undo`, `.draft next`, and `.draft end` to manage the set."
     ), inline=False)
+    embed.add_field(name="Set up a server", value=(
+        "Admins can run `/party setup` once to publish the persistent Play panel "
+        "and create self-assignable role cosmetics."
+    ), inline=False)
 
     embed.set_footer(text=f"Page 2/2 — GodForge v{GODFORGE_VERSION} • use ⬅️ for main commands • {RELEASE_NOTES}")
     return embed
