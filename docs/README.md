@@ -9,6 +9,8 @@ Use these files as the canonical sources:
   implementation order, and linked GitHub issues.
 - [`MATCH_RESULTS_AND_HISTORY.md`](MATCH_RESULTS_AND_HISTORY.md) - durable
   results, recent-match views, and recreational game-night statistics.
+- [`SCHEDULED_CUSTOM_NIGHTS.md`](SCHEDULED_CUSTOM_NIGHTS.md) - timezone-safe
+  custom nights, reminders, ICS export, and live-lobby conversion.
 - [`../VERSION_HISTORY.md`](../VERSION_HISTORY.md) — released and candidate
   milestones.
 - [`../RELEASE_PROCESS.md`](../RELEASE_PROCESS.md) — release gates and tagging.

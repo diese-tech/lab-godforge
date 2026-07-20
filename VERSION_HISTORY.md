@@ -93,6 +93,10 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
   explicit role-fit, transparent balanced, or captain-draft modes. GodForge
   uses its own preferences and optional organizer inputs, reports unavoidable
   fills and strength difference, and stores the explanation with the match.
+- **Scheduled custom nights**: one-time and weekly events confirm an explicit
+  timezone, retain role-aware RSVPs and waitlists, send durable reminders,
+  export portable ICS files, and convert idempotently into the existing lobby
+  and ready-check workflow.
 
 ## Future Version Gates
 

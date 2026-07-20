@@ -94,6 +94,9 @@ Important status notes:
 - Full lobbies use a durable ordered waitlist and automatically start a ready
   check. Players can answer Ready, Need 5 Minutes, or Drop; dropped seats use
   deterministic role-aware promotion without server-wide pings.
+- `/party schedule` creates one-time or weekly custom nights after explicit
+  timezone confirmation. RSVPs retain saved roles, overflow into a waitlist,
+  receive reminders, export to ICS, and open into the same durable lobby flow.
 - GodForge stores standalone match records with two-captain winner
   confirmation, organizer dispute resolution, explicit cancelled/no-contest
   outcomes, and guild/team/player game-night history.
