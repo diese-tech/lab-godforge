@@ -7,9 +7,12 @@ from utils.lobby_views import (
     JOIN_MODAL_CUSTOM_ID,
     LOBBY_CARD_ACTIONS,
     LOBBY_CARD_CUSTOM_ID_PREFIX,
+    READY_CHECK_ACTIONS,
+    READY_CHECK_CUSTOM_ID_PREFIX,
     CreateLobbyModal,
     JoinPreferencesModal,
     LobbyCardView,
+    ReadyCheckView,
 )
 
 
@@ -125,7 +128,7 @@ def test_lobby_card_is_persistent_with_stable_action_ids():
     view = LobbyCardView(AsyncMock())
 
     assert view.timeout is None
-    assert len(view.children) == 5
+    assert len(view.children) == 6
     assert [item.custom_id for item in view.children] == [
         f"{LOBBY_CARD_CUSTOM_ID_PREFIX}:{action}:v1"
         for action, _label, _style in LOBBY_CARD_ACTIONS
@@ -136,7 +139,9 @@ def test_lobby_card_is_persistent_with_stable_action_ids():
         "Edit",
         "Cancel",
         "Share",
+        "Ready Check",
     ]
+    assert [item.row for item in view.children] == [0, 0, 0, 0, 0, 1]
 
 
 @pytest.mark.asyncio
@@ -151,3 +156,44 @@ async def test_lobby_card_delegates_action_and_hides_handler_errors():
     message = interaction.followup.send.await_args.args[0]
     assert "private failure" not in message
     assert interaction.followup.send.await_args.kwargs == {"ephemeral": True}
+
+
+@pytest.mark.asyncio
+async def test_lobby_ready_check_action_is_delegated():
+    handler = AsyncMock()
+    view = LobbyCardView(handler)
+    interaction = _interaction()
+
+    await view.children[5].callback(interaction)
+
+    handler.assert_awaited_once_with(interaction, "ready_check")
+
+
+def test_ready_check_view_is_persistent_with_stable_actions():
+    view = ReadyCheckView(AsyncMock())
+
+    assert view.timeout is None
+    assert [item.custom_id for item in view.children] == [
+        f"{READY_CHECK_CUSTOM_ID_PREFIX}:{action}:v1"
+        for action, _label, _style in READY_CHECK_ACTIONS
+    ]
+    assert [item.label for item in view.children] == [
+        "Ready",
+        "Need 5 Minutes",
+        "Drop",
+    ]
+    assert all(item.row == 0 for item in view.children)
+
+
+@pytest.mark.asyncio
+async def test_ready_check_delegates_and_safely_reports_failures():
+    handler = AsyncMock(side_effect=RuntimeError("private detail"))
+    view = ReadyCheckView(handler)
+    interaction = _interaction()
+
+    await view.children[1].callback(interaction)
+
+    handler.assert_awaited_once_with(interaction, "need_five")
+    message = interaction.response.send_message.await_args.args[0]
+    assert "private detail" not in message
+    assert interaction.response.send_message.await_args.kwargs == {"ephemeral": True}

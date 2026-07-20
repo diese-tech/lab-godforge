@@ -12,6 +12,7 @@ import discord
 CREATE_MODAL_CUSTOM_ID = "godforge:lobby:create:v1"
 JOIN_MODAL_CUSTOM_ID = "godforge:lobby:join-preferences:v1"
 LOBBY_CARD_CUSTOM_ID_PREFIX = "godforge:lobby:card"
+READY_CHECK_CUSTOM_ID_PREFIX = "godforge:lobby:ready-check"
 
 LOBBY_CARD_ACTIONS = (
     ("join", "Join", discord.ButtonStyle.success),
@@ -19,6 +20,13 @@ LOBBY_CARD_ACTIONS = (
     ("edit", "Edit", discord.ButtonStyle.primary),
     ("cancel", "Cancel", discord.ButtonStyle.danger),
     ("share", "Share", discord.ButtonStyle.secondary),
+    ("ready_check", "Ready Check", discord.ButtonStyle.primary),
+)
+
+READY_CHECK_ACTIONS = (
+    ("ready", "Ready", discord.ButtonStyle.success),
+    ("need_five", "Need 5 Minutes", discord.ButtonStyle.secondary),
+    ("drop", "Drop", discord.ButtonStyle.danger),
 )
 
 ModalHandler = Callable[[discord.Interaction, dict[str, object]], Awaitable[None]]
@@ -231,11 +239,15 @@ class _LobbyActionButton(discord.ui.Button):
         label: str,
         style: discord.ButtonStyle,
         handler: LobbyActionHandler,
+        *,
+        custom_id_prefix: str = LOBBY_CARD_CUSTOM_ID_PREFIX,
+        row: int | None = None,
     ) -> None:
         super().__init__(
             label=label,
             style=style,
-            custom_id=f"{LOBBY_CARD_CUSTOM_ID_PREFIX}:{action}:v1",
+            custom_id=f"{custom_id_prefix}:{action}:v1",
+            row=row,
         )
         self.action = action
         self._handler = handler
@@ -253,5 +265,31 @@ class LobbyCardView(discord.ui.View):
 
     def __init__(self, handler: LobbyActionHandler) -> None:
         super().__init__(timeout=None)
-        for action, label, style in LOBBY_CARD_ACTIONS:
-            self.add_item(_LobbyActionButton(action, label, style, handler))
+        for index, (action, label, style) in enumerate(LOBBY_CARD_ACTIONS):
+            self.add_item(
+                _LobbyActionButton(
+                    action,
+                    label,
+                    style,
+                    handler,
+                    row=0 if index < 5 else 1,
+                )
+            )
+
+
+class ReadyCheckView(discord.ui.View):
+    """Persistent participant responses for an active lobby ready check."""
+
+    def __init__(self, handler: LobbyActionHandler) -> None:
+        super().__init__(timeout=None)
+        for action, label, style in READY_CHECK_ACTIONS:
+            self.add_item(
+                _LobbyActionButton(
+                    action,
+                    label,
+                    style,
+                    handler,
+                    custom_id_prefix=READY_CHECK_CUSTOM_ID_PREFIX,
+                    row=0,
+                )
+            )

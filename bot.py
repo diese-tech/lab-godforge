@@ -43,7 +43,19 @@ from utils.guild_setup import (
 )
 from utils.managed_roles import ManagedRoleError, reconcile as reconcile_roles, set_member_role
 from utils.setup_views import PlayPanelView, RolePreferencesView
-from utils.lobby_views import CreateLobbyModal, JoinPreferencesModal, LobbyCardView
+from utils.lobby_views import (
+    CreateLobbyModal,
+    JoinPreferencesModal,
+    LobbyCardView,
+    ReadyCheckView,
+)
+from utils.party_queue import (
+    PartyQueueService,
+    QueueError,
+    QueueStatus,
+    ReadyStatus,
+    SQLitePartyQueueRepository,
+)
 from utils import ledger as ledger_utils
 from utils import wallet as wallet_utils
 
@@ -86,6 +98,7 @@ class GodForgeClient(discord.Client):
         self.add_view(PlayPanelView(_handle_play_panel_action))
         self.add_view(RolePreferencesView(_handle_role_preference))
         self.add_view(LobbyCardView(_handle_lobby_card_action))
+        self.add_view(ReadyCheckView(_handle_ready_check_action))
         await self.tree.sync()
 
 
@@ -95,6 +108,11 @@ sessions = SessionManager()
 drafts = DraftManager()
 party_repository = SQLitePartyRepository(
     os.getenv("GODFORGE_PARTY_DB_PATH", "data/godforge_party.db")
+)
+party_queue_service = PartyQueueService(
+    SQLitePartyQueueRepository(
+        os.getenv("GODFORGE_PARTY_DB_PATH", "data/godforge_party.db")
+    )
 )
 forgelens_adapter = ForgeLensAdapter()
 
@@ -347,6 +365,31 @@ async def cleanup_task():
     expired_drafts = drafts.cleanup_expired()
     if expired_drafts:
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
+
+    for record in party_repository.recover_active():
+        lobby = record.lobby
+        if lobby.state is not LobbyState.READY_CHECK:
+            continue
+        queue, timed_out = await party_queue_service.expire(lobby.lobby_id)
+        if not timed_out:
+            continue
+        if queue.status is QueueStatus.CANCELLED:
+            party_repository.transition(
+                lobby.guild_id,
+                lobby.lobby_id,
+                LobbyState.CANCELLED,
+                operation_id=f"ready-timeout:{lobby.lobby_id}:{queue.ready_deadline}",
+                reason="ready check timed out",
+            )
+        guild_settings = settings.get_guild_settings(str(lobby.guild_id))
+        channel_id = guild_settings["managed"].get("playChannelId")
+        channel = client.get_channel(int(channel_id)) if channel_id else None
+        if channel:
+            await channel.send(
+                "Ready check timed out for "
+                + " ".join(f"<@{user_id}>" for user_id in timed_out),
+                allowed_mentions=discord.AllowedMentions(users=True, roles=False),
+            )
 
 
 @cleanup_task.error
@@ -2177,6 +2220,7 @@ async def _handle_create_lobby_submission(
         ),
         operation_id=f"discord:{interaction.id}:organizer",
     )
+    await _ensure_party_queue(lobby)
     await interaction.response.send_message(
         embed=_lobby_card_embed(lobby),
         view=LobbyCardView(_handle_lobby_card_action),
@@ -2204,25 +2248,41 @@ async def _join_lobby_from_preferences(
         interaction.user.id,
         profile,
     )
-    changed = party_repository.save_participant(
-        guild_id,
+    lobby = party_repository.get(guild_id, lobby_id)
+    if lobby is None:
+        raise ValueError("lobby no longer exists")
+    await _ensure_party_queue(lobby)
+    queue, destination = await party_queue_service.join(
         lobby_id,
-        Participant(
-            interaction.user.id,
-            primary_role=profile.primary_role,
-            secondary_role=profile.secondary_role,
-            fill=profile.fill,
-            captain=profile.captain,
-        ),
-        operation_id=f"discord:{interaction.id}:join",
+        interaction.user.id,
+        profile.roles,
     )
+    if destination in {"active", "unchanged"}:
+        changed = party_repository.save_participant(
+            guild_id,
+            lobby_id,
+            Participant(
+                interaction.user.id,
+                primary_role=profile.primary_role,
+                secondary_role=profile.secondary_role,
+                fill=profile.fill,
+                captain=profile.captain,
+            ),
+            operation_id=f"discord:{interaction.id}:join",
+        )
+    else:
+        changed = lobby
     if interaction.message is not None:
         await interaction.message.edit(
             embed=_lobby_card_embed(changed),
             view=LobbyCardView(_handle_lobby_card_action),
         )
         await interaction.response.send_message(
-            f"Joined lobby `{changed.lobby_id[:8]}`.",
+            (
+                f"Joined lobby `{changed.lobby_id[:8]}`."
+                if destination != "waitlist"
+                else f"Lobby is full; added to waitlist position {len(queue.waitlist)}."
+            ),
             ephemeral=True,
         )
     else:
@@ -2231,6 +2291,46 @@ async def _join_lobby_from_preferences(
             view=LobbyCardView(_handle_lobby_card_action),
             ephemeral=True,
         )
+    if len(queue.active) == queue.capacity and queue.status is QueueStatus.OPEN:
+        queue = await party_queue_service.start_ready_check(lobby_id)
+        if changed.state is LobbyState.OPEN:
+            changed = party_repository.transition(
+                guild_id,
+                lobby_id,
+                LobbyState.FULL,
+                operation_id=f"discord:{interaction.id}:full",
+            )
+        if changed.state is LobbyState.FULL:
+            party_repository.transition(
+                guild_id,
+                lobby_id,
+                LobbyState.READY_CHECK,
+                operation_id=f"discord:{interaction.id}:ready-check",
+            )
+        await interaction.channel.send(
+            content=" ".join(f"<@{member.user_id}>" for member in queue.active),
+            embed=_ready_check_embed(lobby_id, queue),
+            view=ReadyCheckView(_handle_ready_check_action),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
+        )
+
+
+async def _ensure_party_queue(lobby):
+    try:
+        queue = await party_queue_service.create(lobby.lobby_id, lobby.capacity)
+    except QueueError:
+        queue = await party_queue_service.get(lobby.lobby_id)
+    if queue is None:
+        raise RuntimeError("party queue could not be initialized")
+    existing_ids = {member.user_id for member in (*queue.active, *queue.waitlist)}
+    for participant in lobby.participants:
+        if participant.user_id not in existing_ids:
+            queue, _ = await party_queue_service.join(
+                lobby.lobby_id,
+                participant.user_id,
+                participant.preferences,
+            )
+    return queue
 
 
 def _lobby_card_embed(lobby) -> discord.Embed:
@@ -2294,6 +2394,11 @@ async def _handle_lobby_card_action(
         await interaction.response.send_modal(JoinPreferencesModal(join_handler))
         return
     if action == "leave":
+        await _ensure_party_queue(lobby)
+        queue, promoted_id = await party_queue_service.leave(
+            lobby_id,
+            interaction.user.id,
+        )
         changed = party_repository.remove_participant(
             guild_id,
             lobby_id,
@@ -2301,9 +2406,53 @@ async def _handle_lobby_card_action(
             operation_id=f"discord:{interaction.id}:leave",
             actor_id=interaction.user.id,
         )
+        if promoted_id is not None:
+            promoted = party_repository.get_player_preferences(guild_id, promoted_id)
+            changed = party_repository.save_participant(
+                guild_id,
+                lobby_id,
+                Participant(
+                    promoted_id,
+                    primary_role=promoted.primary_role,
+                    secondary_role=promoted.secondary_role,
+                    fill=promoted.fill,
+                    captain=promoted.captain,
+                ),
+                operation_id=f"discord:{interaction.id}:promote:{promoted_id}",
+            )
         await interaction.response.edit_message(
             embed=_lobby_card_embed(changed),
             view=LobbyCardView(_handle_lobby_card_action),
+        )
+        return
+    if action == "ready_check":
+        if interaction.user.id != lobby.organizer_id:
+            await interaction.response.send_message(
+                "Only the organizer can start a ready check.",
+                ephemeral=True,
+            )
+            return
+        queue = await _ensure_party_queue(lobby)
+        queue = await party_queue_service.start_ready_check(lobby_id)
+        if lobby.state is LobbyState.OPEN and len(queue.active) == lobby.capacity:
+            lobby = party_repository.transition(
+                guild_id,
+                lobby_id,
+                LobbyState.FULL,
+                operation_id=f"discord:{interaction.id}:full",
+            )
+        if lobby.state in {LobbyState.FULL, LobbyState.OPEN}:
+            party_repository.transition(
+                guild_id,
+                lobby_id,
+                LobbyState.READY_CHECK,
+                operation_id=f"discord:{interaction.id}:ready-check",
+            )
+        await interaction.response.send_message(
+            content=" ".join(f"<@{member.user_id}>" for member in queue.active),
+            embed=_ready_check_embed(lobby_id, queue),
+            view=ReadyCheckView(_handle_ready_check_action),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
         )
         return
     if action in {"edit", "cancel"} and interaction.user.id != lobby.organizer_id:
@@ -2353,6 +2502,105 @@ async def _handle_lobby_card_action(
         await interaction.channel.send(
             embed=_lobby_card_embed(lobby),
             view=LobbyCardView(_handle_lobby_card_action),
+        )
+
+
+def _ready_check_embed(lobby_id: str, queue) -> discord.Embed:
+    ready_count = sum(
+        status is ReadyStatus.READY for status in queue.ready.values()
+    )
+    embed = discord.Embed(
+        title="GodForge Ready Check",
+        description=(
+            f"{ready_count}/{len(queue.active)} ready. Choose Ready, "
+            "Need 5 Minutes, or Drop."
+        ),
+        color=0xF1C40F,
+    )
+    if queue.ready_deadline:
+        embed.add_field(
+            name="Deadline",
+            value=f"<t:{int(queue.ready_deadline.timestamp())}:R>",
+        )
+    embed.set_footer(text=f"lobby_id={lobby_id}")
+    return embed
+
+
+async def _handle_ready_check_action(
+    interaction: discord.Interaction,
+    action: str,
+) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    lobby_id = _lobby_id_from_interaction(interaction)
+    status = {
+        "ready": ReadyStatus.READY,
+        "need_five": ReadyStatus.NEED_5,
+        "drop": ReadyStatus.DROP,
+    }[action]
+    queue, promoted_id = await party_queue_service.respond(
+        lobby_id,
+        interaction.user.id,
+        status,
+    )
+    if status is ReadyStatus.DROP:
+        changed = party_repository.remove_participant(
+            guild_id,
+            lobby_id,
+            interaction.user.id,
+            operation_id=f"discord:{interaction.id}:ready-drop",
+            actor_id=interaction.user.id,
+        )
+        if promoted_id is not None:
+            promoted = party_repository.get_player_preferences(guild_id, promoted_id)
+            changed = party_repository.save_participant(
+                guild_id,
+                lobby_id,
+                Participant(
+                    promoted_id,
+                    primary_role=promoted.primary_role,
+                    secondary_role=promoted.secondary_role,
+                    fill=promoted.fill,
+                    captain=promoted.captain,
+                ),
+                operation_id=f"discord:{interaction.id}:ready-promote:{promoted_id}",
+            )
+        if changed.state is LobbyState.READY_CHECK:
+            party_repository.transition(
+                guild_id,
+                lobby_id,
+                LobbyState.OPEN,
+                operation_id=f"discord:{interaction.id}:reopen",
+            )
+    everyone_ready = bool(queue.active) and all(
+        queue.ready.get(member.user_id) is ReadyStatus.READY
+        for member in queue.active
+    )
+    if everyone_ready:
+        lobby = party_repository.get(guild_id, lobby_id)
+        if lobby and lobby.state is LobbyState.READY_CHECK:
+            party_repository.transition(
+                guild_id,
+                lobby_id,
+                LobbyState.FORMING,
+                operation_id=f"discord:{interaction.id}:forming",
+            )
+        await interaction.response.edit_message(
+            content="Everyone is ready. GodForge is forming the match.",
+            embed=_ready_check_embed(lobby_id, queue),
+            view=None,
+        )
+        return
+    await interaction.response.edit_message(
+        embed=_ready_check_embed(lobby_id, queue),
+        view=ReadyCheckView(_handle_ready_check_action),
+    )
+    if promoted_id is not None:
+        await interaction.followup.send(
+            f"<@{promoted_id}> was promoted from the waitlist.",
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
         )
 
 

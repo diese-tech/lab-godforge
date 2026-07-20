@@ -91,6 +91,9 @@ Important status notes:
 - Lobby creation captures mode, region, format, party size, voice requirement,
   skill band, and notes. Reusable lobby cards support join, leave, edit, cancel,
   and share actions without a web account.
+- Full lobbies use a durable ordered waitlist and automatically start a ready
+  check. Players can answer Ready, Need 5 Minutes, or Drop; dropped seats use
+  deterministic role-aware promotion without server-wide pings.
 
 ## Architecture / System Flow
 
