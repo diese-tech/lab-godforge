@@ -1,8 +1,6 @@
-import { getAdminAudit, getAdminStatus, getAuthStatus, getHealth, login, logout, setApiOnline, syncLedgerEmbed } from "./api.js";
-import { initBetting, loadBetting } from "./betting.js";
+import { getAdminAudit, getAdminStatus, getAuthStatus, getHealth, login, logout, setApiOnline } from "./api.js";
 import { initCommands, loadCustomCommands } from "./commands.js";
 import { initDraft } from "./draft.js";
-import { initMatchOps, loadMatches } from "./match-ops.js";
 import { initRandomizer } from "./randomizer.js";
 import { initSettings, loadSettings } from "./settings.js";
 import { escapeHtml } from "./security.js";
@@ -15,8 +13,6 @@ export const dashboardTitles = {
   randomizer: "Randomizer",
   builds: "Builds",
   drafts: "Drafts",
-  match: "Match Ops",
-  betting: "Betting and Wallets",
   settings: "Settings",
 };
 
@@ -75,7 +71,6 @@ async function loadAdminStatus() {
     const status = payload.status || {};
     const bot = status.bot || {};
     const data = status.data || {};
-    const statusCounts = data.statusCounts || {};
 
     if (summary) {
       summary.innerHTML = `
@@ -90,13 +85,13 @@ async function loadAdminStatus() {
           <small>${bot.latencyMs === null || bot.latencyMs === undefined ? "Latency unavailable" : `${bot.latencyMs}ms latency`}</small>
         </article>
         <article class="ops-stat">
-          <span>Ledger</span>
-          <strong>${data.matchCount ?? 0}</strong>
-          <small>${data.embedConfigured ? "Discord embed linked" : "Embed pointer missing"}</small>
+          <span>Party workflow</span>
+          <strong>Standalone</strong>
+          <small>Companion services are optional</small>
         </article>
         <article class="ops-stat">
-          <span>Wallets</span>
-          <strong>${data.walletCount ?? 0}</strong>
+          <span>Draft rooms</span>
+          <strong>${status.draftRooms ?? 0}</strong>
           <small>${status.draftRooms ?? 0} active web draft rooms</small>
         </article>
         <article class="ops-stat">
@@ -124,7 +119,7 @@ async function loadAdminStatus() {
     }
 
     if (syncState) {
-      syncState.textContent = `Open ${statusCounts.betting_open || 0} / live ${statusCounts.in_progress || 0} / completed ${statusCounts.completed || 0} / settled ${statusCounts.settled || 0}`;
+      syncState.textContent = `${status.draftRooms ?? 0} active draft rooms`;
     }
   } catch (error) {
     if (summary) {
@@ -323,14 +318,8 @@ function activateDashboardTab(tabName) {
 
   $("#admin-login-panel")?.classList.toggle("is-visible", protectedPanel && !isAuthenticated);
 
-  if (isAuthenticated && tabName === "match") {
-    loadMatches();
-  }
   if (isAuthenticated && tabName === "commands") {
     loadCustomCommands();
-  }
-  if (isAuthenticated && tabName === "betting") {
-    loadBetting();
   }
   if (isAuthenticated && tabName === "overview") {
     loadAdminStatus();
@@ -443,7 +432,7 @@ async function refreshAuthStatus() {
     const status = await getAuthStatus();
     setAuthState(Boolean(status.authenticated), Boolean(status.configured));
     if (status.authenticated) {
-      await Promise.all([loadMatches(), loadBetting()]);
+      await Promise.all([loadAdminStatus(), loadAdminAudit()]);
     }
   } catch {
     setAuthState(false, false);
@@ -460,7 +449,7 @@ function bindAuth() {
       $("#admin-password").value = "";
       setAuthState(true, true);
       showToast("Admin dashboard unlocked.");
-      await Promise.all([loadMatches(), loadBetting(), loadAdminStatus(), loadAdminAudit(), loadSettings(), loadCustomCommands()]);
+      await Promise.all([loadAdminStatus(), loadAdminAudit(), loadSettings(), loadCustomCommands()]);
     } catch (error) {
       showToast(error.message || "Admin login failed.");
     }
@@ -478,15 +467,6 @@ function bindAuth() {
 
 function bindAdminControls() {
   $("#admin-status-refresh")?.addEventListener("click", loadAdminStatus);
-  $("#admin-sync-ledger")?.addEventListener("click", async () => {
-    try {
-      const payload = await syncLedgerEmbed();
-      showToast(payload.discord_embed_update ? "Discord ledger refresh queued." : "Discord bot loop is not available.");
-      await Promise.all([loadAdminStatus(), loadAdminAudit()]);
-    } catch (error) {
-      showToast(error.message || "Discord sync failed.");
-    }
-  });
 }
 
 function init() {
@@ -498,8 +478,6 @@ function init() {
   initCommands();
   initRandomizer();
   initDraft();
-  initMatchOps();
-  initBetting();
   initSettings();
   checkApiHealth();
   refreshAuthStatus();

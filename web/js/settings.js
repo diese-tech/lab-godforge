@@ -25,9 +25,7 @@ function renderSettings(settings) {
   setChecked("setting-bot-enabled", settings.features?.botEnabled);
   setChecked("setting-randomizer-enabled", settings.features?.randomizerEnabled);
   setChecked("setting-drafts-enabled", settings.features?.draftsEnabled);
-  setChecked("setting-betting-enabled", settings.features?.bettingEnabled);
   setValue("setting-match-channel", settings.channels?.matchChannel);
-  setValue("setting-betting-channel", settings.channels?.bettingChannel);
   setValue("setting-admin-channel", settings.channels?.adminChannel);
   setValue("setting-admin-role", settings.roles?.adminRole);
   setValue("setting-captain-role", settings.roles?.captainRole);
@@ -52,11 +50,9 @@ async function submitSettings(event) {
       botEnabled: $("#setting-bot-enabled")?.checked ?? true,
       randomizerEnabled: $("#setting-randomizer-enabled")?.checked ?? true,
       draftsEnabled: $("#setting-drafts-enabled")?.checked ?? true,
-      bettingEnabled: $("#setting-betting-enabled")?.checked ?? true,
     },
     channels: {
       matchChannel: $("#setting-match-channel")?.value || "",
-      bettingChannel: $("#setting-betting-channel")?.value || "",
       adminChannel: $("#setting-admin-channel")?.value || "",
     },
     roles: {

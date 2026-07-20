@@ -88,7 +88,7 @@
                   <span>GF-0007</span>
                   <strong>Solaris vs Onyx</strong>
                 </div>
-                <span class="pill live">Betting open</span>
+                <span class="pill live">Lobby ready</span>
               </div>
             </div>
           </div>
@@ -102,7 +102,7 @@
           <p>
             The bot stays the live match-night operator. The website becomes the place to
             manage command config, Smite tools, server defaults,
-            draft presets, betting rules, and owned production graphics.
+            draft presets, party defaults, and owned production graphics.
           </p>
         </section>
 
@@ -155,20 +155,6 @@
               </div>
               <div class="sidebar-section">
                 <div class="sidebar-section-title">
-                  <span>Match Night</span>
-                  <small>Admin</small>
-                </div>
-                <button class="module-tab" data-dashboard-tab="match">
-                  <span class="module-dot module-dot--live"></span>
-                  <span>Match Ops</span>
-                </button>
-                <button class="module-tab" data-dashboard-tab="betting">
-                  <span class="module-dot module-dot--live"></span>
-                  <span>Betting</span>
-                </button>
-              </div>
-              <div class="sidebar-section">
-                <div class="sidebar-section-title">
                   <span>Server Management</span>
                   <small>Setup</small>
                 </div>
@@ -197,7 +183,7 @@
                 <div>
                   <p class="eyebrow compact">Admin access</p>
                   <h4>Unlock live server controls</h4>
-                  <p>Match ops, betting, wallets, drafts, and command actions require Discord login or the temporary admin password.</p>
+                  <p>Draft, settings, and command actions require Discord login or the temporary admin password.</p>
                 </div>
                 <form id="admin-login-form" class="admin-login-form">
                   <label>
@@ -213,8 +199,8 @@
                 <div class="metric-row">
                   <article class="metric-card">
                     <span>Active modules</span>
-                    <strong>6</strong>
-                    <small>Config, rolls, builds, drafts, matches, betting, settings</small>
+                    <strong>5</strong>
+                    <small>Config, rolls, builds, drafts, and settings</small>
                   </article>
                   <article class="metric-card">
                     <span>Server status</span>
@@ -236,7 +222,6 @@
                     <div class="console-actions">
                     <span class="pill prototype" id="admin-sync-state">Login required</span>
                       <button class="button button-secondary" id="admin-status-refresh" type="button">Refresh Status</button>
-                      <button class="button button-primary" id="admin-sync-ledger" type="button">Sync Discord Embed</button>
                     </div>
                   </div>
                   <div class="ops-stat-grid" id="admin-status-summary" aria-live="polite">
@@ -286,7 +271,7 @@
                   <article class="portal-card highlight-card">
                     <span class="pill live">Bot live today</span>
                     <h4>Discord commands keep running the show.</h4>
-                    <p>God picks, Roll Team, builds, sessions, drafts, betting, wallets, and ledgers stay in Discord until real portal APIs exist.</p>
+                    <p>God picks, Roll Team, builds, sessions, drafts, parties, and ready checks stay in Discord until their portal APIs exist.</p>
                   </article>
                   <article class="portal-card">
                     <span class="pill live">Dashboard online</span>
@@ -535,206 +520,6 @@
                 </div>
               </div>
 
-              <div class="dashboard-panel" data-dashboard-panel="match" data-admin-panel>
-                <div class="ops-layout">
-                  <article class="ops-panel ops-panel-wide">
-                    <div class="panel-heading-row">
-                      <div>
-                        <p class="eyebrow compact">Match lifecycle</p>
-                        <h4>Active Matches</h4>
-                      </div>
-                      <button class="button button-secondary" id="match-refresh" type="button">Refresh</button>
-                    </div>
-                    <div class="match-list" id="active-matches" aria-live="polite"></div>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Create Match</p>
-                    <form id="match-create-form" class="stack-form">
-                      <label>
-                        Team 1
-                        <input id="match-team1" placeholder="Solaris" />
-                      </label>
-                      <label>
-                        Team 2
-                        <input id="match-team2" placeholder="Onyx" />
-                      </label>
-                      <button class="button button-primary" type="submit">Create Match</button>
-                    </form>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Status</p>
-                    <form id="match-status-form" class="stack-form">
-                      <label>
-                        Match ID
-                        <input id="match-status-id" placeholder="GF-0007" />
-                      </label>
-                      <label>
-                        Status
-                        <select id="match-status-value">
-                          <option value="betting_open">Betting open</option>
-                          <option value="in_progress">In progress</option>
-                          <option value="completed">Completed</option>
-                          <option value="settled">Settled</option>
-                        </select>
-                      </label>
-                      <button class="button button-secondary" type="submit">Update Status</button>
-                    </form>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Resolve Winner</p>
-                    <form id="match-resolve-form" class="stack-form">
-                      <label>
-                        Match ID
-                        <input id="match-resolve-id" placeholder="GF-0007" />
-                      </label>
-                      <label>
-                        Winner
-                        <input id="match-winner" placeholder="Solaris" />
-                      </label>
-                      <button class="button button-secondary" type="submit">Resolve Win Bets</button>
-                    </form>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Resolve Prop</p>
-                    <form id="match-prop-resolve-form" class="stack-form">
-                      <label>
-                        Match ID
-                        <input id="match-prop-id" placeholder="GF-0007" />
-                      </label>
-                      <label>
-                        Player
-                        <input id="match-prop-player" placeholder="Solaris ADC" />
-                      </label>
-                      <div class="form-row">
-                        <label>
-                          Stat
-                          <input id="match-prop-stat" placeholder="kills" />
-                        </label>
-                        <label>
-                          Actual
-                          <input id="match-prop-actual" type="number" step="0.1" value="8" />
-                        </label>
-                      </div>
-                      <button class="button button-secondary" type="submit">Resolve Prop Bets</button>
-                    </form>
-                  </article>
-                </div>
-              </div>
-
-              <div class="dashboard-panel" data-dashboard-panel="betting" data-admin-panel>
-                <div class="ops-layout">
-                  <article class="ops-panel ops-panel-wide">
-                    <div class="panel-heading-row">
-                      <div>
-                        <p class="eyebrow compact">Betting surface</p>
-                        <h4>Active Bets</h4>
-                      </div>
-                      <button class="button button-secondary" id="betting-refresh" type="button">Refresh</button>
-                    </div>
-                    <div class="bet-list" id="active-bets" aria-live="polite"></div>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Wallets</p>
-                    <h4>Leaderboard</h4>
-                    <div class="wallet-list" id="wallet-leaderboard" aria-live="polite"></div>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Place Bet</p>
-                    <form id="place-bet-form" class="stack-form">
-                      <div class="form-row">
-                        <label>
-                          Match ID
-                          <input id="bet-match-id" placeholder="GF-0007" />
-                        </label>
-                        <label>
-                          Bettor
-                          <input id="bet-bettor" placeholder="AtlasMain" />
-                        </label>
-                      </div>
-                      <div class="form-row">
-                        <label>
-                          Type
-                          <select id="bet-type">
-                            <option value="win">Win</option>
-                            <option value="prop">Prop</option>
-                          </select>
-                        </label>
-                        <label>
-                          Amount
-                          <input id="bet-amount" type="number" min="1" step="1" value="50" />
-                        </label>
-                      </div>
-                      <div id="win-bet-fields">
-                        <label>
-                          Team
-                          <input id="bet-team" placeholder="Solaris" />
-                        </label>
-                      </div>
-                      <div id="prop-bet-fields" class="is-hidden">
-                        <label>
-                          Player
-                          <input id="bet-player" placeholder="Solaris ADC" />
-                        </label>
-                        <div class="form-row">
-                          <label>
-                            Stat
-                            <input id="bet-stat" placeholder="kills" />
-                          </label>
-                          <label>
-                            Direction
-                            <select id="bet-direction">
-                              <option value="over">Over</option>
-                              <option value="under">Under</option>
-                            </select>
-                          </label>
-                        </div>
-                        <label>
-                          Threshold
-                          <input id="bet-threshold" type="number" step="0.1" value="7.5" />
-                        </label>
-                      </div>
-                      <button class="button button-primary" type="submit">Place Bet</button>
-                    </form>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Admin Wallet Actions</p>
-                    <form id="wallet-adjust-form" class="stack-form">
-                      <label>
-                        Player
-                        <input id="wallet-target" placeholder="AtlasMain" />
-                      </label>
-                      <label>
-                        Action
-                        <select id="wallet-action">
-                          <option value="give">Give</option>
-                          <option value="take">Take</option>
-                          <option value="set">Set</option>
-                        </select>
-                      </label>
-                      <label>
-                        Amount
-                        <input id="wallet-amount" type="number" min="0" step="1" value="100" />
-                      </label>
-                      <button class="button button-primary" type="submit">Apply Wallet Change</button>
-                    </form>
-                  </article>
-
-                  <article class="ops-panel">
-                    <p class="eyebrow compact">Ledger Controls</p>
-                    <h4>Reset weekly ledger</h4>
-                    <p class="tool-help">Clears matches and bets only. Wallet balances remain in place.</p>
-                    <button class="button button-secondary danger-button" id="ledger-reset-button" type="button">Reset Ledger</button>
-                  </article>
-                </div>
-              </div>
-
               <div class="dashboard-panel" data-dashboard-panel="settings" data-admin-panel>
                 <div class="settings-grid">
                   <article class="settings-card">
@@ -759,19 +544,11 @@
                           <input id="setting-drafts-enabled" type="checkbox" checked />
                           <span>Drafts</span>
                         </label>
-                        <label class="toggle-line">
-                          <input id="setting-betting-enabled" type="checkbox" checked />
-                          <span>Betting</span>
-                        </label>
                       </div>
                       <div class="form-row">
                         <label>
                           Match channel
                           <input id="setting-match-channel" placeholder="#matches" maxlength="80" />
-                        </label>
-                        <label>
-                          Betting channel
-                          <input id="setting-betting-channel" placeholder="#place-bets" maxlength="80" />
                         </label>
                       </div>
                       <label>
@@ -801,24 +578,6 @@
                     <label class="settings-label">Configured role labels</label>
                     <div class="role-chip-row" id="bot-master-role-chips">
                       <span>No role labels configured yet</span>
-                    </div>
-                    <div class="permission-radio-group">
-                      <p>Premium/monetization surface</p>
-                      <label>
-                        <input type="radio" name="setting-monetize-access" value="none" checked />
-                        <span>No access</span>
-                        <small>Bot masters cannot see monetization controls.</small>
-                      </label>
-                      <label>
-                        <input type="radio" name="setting-monetize-access" value="read" />
-                        <span>Read-only access</span>
-                        <small>Bot masters can view data but cannot take actions.</small>
-                      </label>
-                      <label>
-                        <input type="radio" name="setting-monetize-access" value="manage" />
-                        <span>Management access</span>
-                        <small>Bot masters can manage future premium/server economy actions.</small>
-                      </label>
                     </div>
                     <h4>Production gates</h4>
                     <p>These settings persist to local JSON for the Railway milestone. Discord OAuth, real guild selection, RBAC, audit logs, and database-backed settings remain staged work.</p>
