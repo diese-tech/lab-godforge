@@ -2,8 +2,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from utils.party import PlayerPreferences
-from utils.party_queue import InMemoryPartyQueueRepository, PartyQueueService
+from utils.party import LobbyState, PlayerPreferences
+from utils.party_queue import (
+    InMemoryPartyQueueRepository,
+    PartyQueueService,
+    QueueStatus,
+    SQLitePartyQueueRepository,
+)
 from utils.party_schedule import (
     EventState,
     Recurrence,
@@ -93,6 +98,7 @@ async def test_conversion_is_idempotent_and_preserves_preferences_and_waitlist(t
     queues = PartyQueueService(InMemoryPartyQueueRepository())
 
     first = await convert_to_lobby(schedules.get(event.event_id), schedules, parties, queues)
+    first_queue = await queues.get(first.lobby_id)
     second = await convert_to_lobby(schedules.get(event.event_id), schedules, parties, queues)
 
     assert first.lobby_id == second.lobby_id == f"scheduled-{event.event_id}"
@@ -101,6 +107,9 @@ async def test_conversion_is_idempotent_and_preserves_preferences_and_waitlist(t
     queue = await queues.get(first.lobby_id)
     assert [member.user_id for member in queue.active] == [1, 2]
     assert [member.user_id for member in queue.waitlist] == [3]
+    assert first.state is second.state is LobbyState.READY_CHECK
+    assert queue.status is QueueStatus.READY_CHECK
+    assert queue.ready_deadline == first_queue.ready_deadline
     assert schedules.get(event.event_id).state is EventState.CONVERTED
 
 
@@ -110,8 +119,25 @@ def test_weekly_calendar_export_needs_no_calendar_account(tmp_path):
     payload = calendar_ics(event).decode()
     assert "BEGIN:VCALENDAR" in payload
     assert "RRULE:FREQ=WEEKLY" in payload
-    assert "DTSTART:20260725T000000Z" in payload
+    assert "DTSTART;TZID=America/New_York:20260724T200000" in payload
     assert f"UID:{event.event_id}@godforge" in payload
+
+
+def test_weekly_calendar_keeps_wall_time_across_dst(tmp_path):
+    repository = ScheduleRepository(tmp_path / "party.db")
+    event = repository.create(
+        guild_id=1,
+        organizer_id=10,
+        title="Saturday Customs",
+        starts_at=datetime(2026, 11, 1, 0, tzinfo=timezone.utc),
+        timezone_name="America/New_York",
+        recurrence=Recurrence.WEEKLY,
+        capacity=10,
+        operation_id="dst-ics",
+    )
+    payload = calendar_ics(event).decode()
+    assert "DTSTART;TZID=America/New_York:20261031T200000" in payload
+    assert "RRULE:FREQ=WEEKLY" in payload
 
 
 def test_weekly_conversion_schedules_next_occurrence_once(tmp_path):
@@ -166,3 +192,69 @@ def test_reminder_claim_is_restart_safe_and_only_due_before_start(tmp_path):
         (60, event.starts_at)
     ]
     assert ScheduleRepository(path).claim_due_reminders(now=due_at) == []
+
+
+def test_weekly_reminder_preserves_wall_time_across_dst(tmp_path):
+    repository = ScheduleRepository(tmp_path / "party.db")
+    event = repository.create(
+        guild_id=1,
+        organizer_id=10,
+        title="Saturday Customs",
+        starts_at=datetime(2026, 11, 1, 0, tzinfo=timezone.utc),
+        timezone_name="America/New_York",
+        recurrence=Recurrence.WEEKLY,
+        capacity=10,
+        reminder_minutes=(60,),
+        operation_id="dst-reminder",
+    )
+    repository.confirm(event.event_id, 10)
+    claimed = repository.claim_due_reminders(
+        now=datetime(2026, 11, 8, 0, 1, tzinfo=timezone.utc)
+    )
+    assert [(minutes, occurrence) for _, minutes, occurrence in claimed] == [
+        (60, datetime(2026, 11, 8, 1, tzinfo=timezone.utc))
+    ]
+
+
+def test_reminders_shorter_than_poll_interval_are_rejected(tmp_path):
+    repository = ScheduleRepository(tmp_path / "party.db")
+    with pytest.raises(ScheduleError, match="5-10080"):
+        repository.create(
+            guild_id=1,
+            organizer_id=10,
+            title="Too Late",
+            starts_at=datetime(2026, 7, 25, 0, tzinfo=timezone.utc),
+            timezone_name="America/New_York",
+            recurrence=Recurrence.ONCE,
+            capacity=10,
+            reminder_minutes=(4,),
+            operation_id="short-reminder",
+        )
+
+
+@pytest.mark.asyncio
+async def test_full_roster_conversion_recovers_ready_check_after_restart(tmp_path):
+    path = tmp_path / "party.db"
+    schedules = ScheduleRepository(path)
+    event = _event(schedules)
+    schedules.confirm(event.event_id, 10)
+    schedules.rsvp(event.event_id, 1, PlayerPreferences("solo"))
+    schedules.rsvp(event.event_id, 2, PlayerPreferences("jungle"))
+    parties = SQLitePartyRepository(path)
+    queues = PartyQueueService(SQLitePartyQueueRepository(path))
+    first = await convert_to_lobby(
+        schedules.get(event.event_id), schedules, parties, queues
+    )
+    first_queue = await queues.get(first.lobby_id)
+
+    recovered = await convert_to_lobby(
+        ScheduleRepository(path).get(event.event_id),
+        ScheduleRepository(path),
+        SQLitePartyRepository(path),
+        PartyQueueService(SQLitePartyQueueRepository(path)),
+    )
+    recovered_queue = await SQLitePartyQueueRepository(path).load(first.lobby_id)
+
+    assert recovered.state is LobbyState.READY_CHECK
+    assert recovered_queue.status is QueueStatus.READY_CHECK
+    assert recovered_queue.ready_deadline == first_queue.ready_deadline

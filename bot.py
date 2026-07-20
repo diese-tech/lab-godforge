@@ -2339,8 +2339,8 @@ async def party_schedule(
         reminder_values = tuple(
             int(value.strip()) for value in reminders.split(",") if value.strip()
         )
-        if not reminder_values or any(value < 1 or value > 10080 for value in reminder_values):
-            raise ScheduleError("reminders must be 1-10080 minutes before start")
+        if not reminder_values or any(value < 5 or value > 10080 for value in reminder_values):
+            raise ScheduleError("reminders must be 5-10080 minutes before start")
         event = schedule_repository.create(
             guild_id=interaction.guild_id,
             organizer_id=interaction.user.id,
@@ -2473,11 +2473,20 @@ async def party_open_scheduled(interaction: discord.Interaction, event_id: str):
     except (ScheduleError, ValueError, QueueError) as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
-    await interaction.response.send_message(
-        content=f"**{event.title}** is now an ordinary GodForge lobby.",
-        embed=_lobby_card_embed(lobby),
-        view=LobbyCardView(_handle_lobby_card_action),
-    )
+    queue = await party_queue_service.get(lobby.lobby_id)
+    if lobby.state is LobbyState.READY_CHECK and queue is not None:
+        await interaction.response.send_message(
+            content=" ".join(f"<@{member.user_id}>" for member in queue.active),
+            embed=_ready_check_embed(lobby.lobby_id, queue),
+            view=ReadyCheckView(_handle_ready_check_action),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
+        )
+    else:
+        await interaction.response.send_message(
+            content=f"**{event.title}** is now an ordinary GodForge lobby.",
+            embed=_lobby_card_embed(lobby),
+            view=LobbyCardView(_handle_lobby_card_action),
+        )
 
 
 async def _handle_play_panel_action(

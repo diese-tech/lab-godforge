@@ -15,7 +15,8 @@ does not manage general meetings or require a calendar account.
 4. `/party calendar EVENT_ID` downloads a portable ICS file. Weekly nights
    contain an RRULE and create the next GodForge occurrence when opened.
 5. GodForge sends configured reminder DMs once, with delivery claims persisted
-   across restarts.
+   across restarts. Reminder offsets must be at least five minutes so the
+   five-minute delivery poll cannot skip their entire window.
 6. The organizer runs `/party open-scheduled EVENT_ID`. Retries resolve to the
    same ordinary party lobby, roster, and queue. Existing ready-check, draft,
    room, and results workflows apply unchanged.
@@ -36,7 +37,8 @@ the same input normalizes consistently on Windows and Linux.
 Nonexistent spring-forward times and ambiguous fall-back times are rejected
 with a repair message instead of silently shifting or guessing. Weekly
 occurrences preserve the confirmed local weekday and wall-clock time across
-daylight-saving offset changes.
+daylight-saving offset changes. ICS exports use timezone-local recurrence
+fields for the same reason.
 
 ## Data and scope
 

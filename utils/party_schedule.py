@@ -14,7 +14,8 @@ from pathlib import Path
 from typing import Iterator
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from utils.party import Participant, PlayerPreferences, ensure_utc
+from utils.party import LobbyState, Participant, PlayerPreferences, ensure_utc
+from utils.party_queue import QueueStatus
 
 
 class ScheduleError(ValueError):
@@ -63,6 +64,10 @@ class ScheduledNight:
         object.__setattr__(self, "state", EventState(self.state))
         if self.capacity < 2 or self.capacity > 20:
             raise ScheduleError("capacity must be between 2 and 20")
+        if not self.reminder_minutes or any(
+            minutes < 5 or minutes > 10080 for minutes in self.reminder_minutes
+        ):
+            raise ScheduleError("reminders must be 5-10080 minutes before start")
 
 
 def parse_local_start(value: str, timezone_name: str, *, now: datetime | None = None) -> datetime:
@@ -150,6 +155,28 @@ def _parse_clock(value: str):
         except ValueError:
             pass
     raise ScheduleError("time of day must look like `8 PM` or `20:00`")
+
+
+def _weekly_occurrence_at_or_after(
+    starts_at: datetime, timezone_name: str, at: datetime
+) -> datetime:
+    """Return a weekly occurrence without applying seven-day arithmetic in UTC."""
+    zone = ZoneInfo(timezone_name)
+    local_start = ensure_utc(starts_at).astimezone(zone)
+    local_at = ensure_utc(at).astimezone(zone)
+    elapsed_weeks = max(0, (local_at.date() - local_start.date()).days // 7)
+    occurrence = _strict_local_time(
+        local_start.date() + timedelta(weeks=elapsed_weeks),
+        local_start.time().replace(tzinfo=None),
+        zone,
+    ).astimezone(timezone.utc)
+    if occurrence < at:
+        occurrence = _strict_local_time(
+            local_start.date() + timedelta(weeks=elapsed_weeks + 1),
+            local_start.time().replace(tzinfo=None),
+            zone,
+        ).astimezone(timezone.utc)
+    return occurrence
 
 
 class ScheduleRepository:
@@ -371,17 +398,17 @@ class ScheduleRepository:
         due: list[tuple[ScheduledNight, int, datetime]] = []
         with self._transaction() as conn:
             rows = conn.execute(
-                "SELECT event_id,starts_at,recurrence,reminder_minutes FROM scheduled_nights "
+                "SELECT event_id,starts_at,timezone_name,recurrence,reminder_minutes "
+                "FROM scheduled_nights "
                 "WHERE state=?",
                 (EventState.SCHEDULED,),
             ).fetchall()
             for row in rows:
                 occurrence = datetime.fromisoformat(row["starts_at"])
                 if row["recurrence"] == Recurrence.WEEKLY and occurrence < at:
-                    elapsed = (at - occurrence).days // 7
-                    occurrence += timedelta(weeks=elapsed)
-                    if occurrence < at:
-                        occurrence += timedelta(weeks=1)
+                    occurrence = _weekly_occurrence_at_or_after(
+                        occurrence, row["timezone_name"], at
+                    )
                 for minutes in (int(v) for v in row["reminder_minutes"].split(",") if v):
                     delivery_at = occurrence - timedelta(minutes=minutes)
                     if not delivery_at <= at < occurrence:
@@ -469,13 +496,41 @@ async def convert_to_lobby(event: ScheduledNight, schedules: ScheduleRepository,
         await queues.join(lobby_id, rsvp.user_id, participant.preferences)
     for rsvp in event.waitlist:
         await queues.join(lobby_id, rsvp.user_id, rsvp.preferences.roles)
+    queue = await queues.get(lobby_id)
+    lobby = parties.get(event.guild_id, lobby_id)
+    if queue and len(queue.active) == queue.capacity:
+        if lobby.state is LobbyState.OPEN:
+            lobby = parties.transition(
+                event.guild_id,
+                lobby_id,
+                LobbyState.FULL,
+                operation_id=f"schedule:{event.event_id}:full",
+                actor_id=event.organizer_id,
+                reason="scheduled RSVP roster reached capacity",
+            )
+        if queue.status is QueueStatus.OPEN:
+            queue = await queues.start_ready_check(lobby_id)
+        if lobby.state is LobbyState.FULL:
+            lobby = parties.transition(
+                event.guild_id,
+                lobby_id,
+                LobbyState.READY_CHECK,
+                operation_id=f"schedule:{event.event_id}:ready-check",
+                actor_id=event.organizer_id,
+                reason="scheduled full roster ready check",
+            )
     schedules.mark_converted(event.event_id, lobby_id)
     return parties.get(event.guild_id, lobby_id)
 
 
 def calendar_ics(event: ScheduledNight) -> bytes:
     stamp = event.starts_at.strftime("%Y%m%dT%H%M%SZ")
-    end = (event.starts_at + timedelta(hours=3)).strftime("%Y%m%dT%H%M%SZ")
+    zone = ZoneInfo(event.timezone_name)
+    local_start = event.starts_at.astimezone(zone)
+    local_end = local_start + timedelta(hours=3)
+    local_format = "%Y%m%dT%H%M%S"
+    start = local_start.strftime(local_format)
+    end = local_end.strftime(local_format)
     interval = "\r\nRRULE:FREQ=WEEKLY" if event.recurrence is Recurrence.WEEKLY else ""
     title = (
         event.title.replace("\r", " ").replace("\n", " ")
@@ -485,7 +540,8 @@ def calendar_ics(event: ScheduledNight) -> bytes:
         "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//GodForge//SMITE Night//EN\r\n"
         "BEGIN:VEVENT\r\n"
         f"UID:{event.event_id}@godforge\r\nDTSTAMP:{stamp}\r\n"
-        f"DTSTART:{stamp}\r\nDTEND:{end}\r\nSUMMARY:{title}{interval}\r\n"
+        f"DTSTART;TZID={event.timezone_name}:{start}\r\n"
+        f"DTEND;TZID={event.timezone_name}:{end}\r\nSUMMARY:{title}{interval}\r\n"
         "END:VEVENT\r\nEND:VCALENDAR\r\n"
     )
     return body.encode("utf-8")
