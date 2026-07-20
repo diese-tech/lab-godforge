@@ -49,27 +49,37 @@ migration risk (new code).
 - **Depends on:** Phase 0. **Risk:** low (additive; r67 only). **Rollback:** revert
   the registry wiring; features keep working via direct calls.
 
-### Phase 2 — Shared command routing seam
+### Phase 2 — Shared command routing seam (DONE)
 
-Introduce a small command dispatcher so a feature registers its dot-command
-prefix(es) and receives a parsed request, replacing the growing `if _first == …`
-ladder in `on_message`. Migrate `.r67` and the deprecated-economy notice first.
+`utils/routing.CommandRegistry` lets features register the exact dot-command
+token(s) they own; `on_message` resolves them in one lookup. `.r67` and the
+deprecated-economy tokens are migrated. Parser-driven commands stay in the parser
+fallback until their own phases.
 
 - **Depends on:** Phase 1. **Risk:** low–medium (touches the hot `on_message`
-  path). **Rollback:** the dispatcher falls back to existing routing.
+  path). **Rollback:** revert the registry lookup; explicit routing returns.
 
-### Phase 3 — Sessions & local drafts feature
+### Phase 3 — Sessions & local drafts feature (IN PROGRESS)
 
 Move `_handle_session`, `_handle_draft*`, draft board/reaction handlers, and the
-in-memory session/draft managers behind a `utils/sessions/` feature with its own
-adapter and lifecycle (the draft-restart notice becomes a lifecycle hook).
+in-memory session/draft managers behind a feature with its own adapter and
+lifecycle (the draft-restart notice becomes a lifecycle hook).
 
-- **Depends on:** Phases 1–2. **Risk:** medium (reaction handlers, WS listener).
+- **3a (DONE)** — `utils/active_drafts.ActiveDraftStore` owns the restart-pointer
+  JSON persistence.
+- **3b (DONE)** — `utils/session_commands.SessionCommandHandler` owns the
+  `.session` command family.
+- **3c (TODO)** — draft command handlers (`.draft` local + activity), the draft
+  board renderer, the WS listener, and the draft reaction handler; the
+  draft-restart notice becomes a lifecycle hook.
+- **Depends on:** Phases 1–2. **Risk:** medium (reaction handlers, WS listener,
+  activity-backend + `_match_ids`/`_ws_tasks` shared state).
 
-### Phase 4 — Custom commands feature
+### Phase 4 — Custom commands feature (DONE)
 
-Move `_handle_custom_command` and its channel/role/cooldown gates behind a
-feature module. Self-contained; good early confidence builder.
+`utils/custom_command_runtime.CustomCommandRuntime` owns matching, channel/role
+gating, and per-user cooldowns, with dependencies injected. `bot.py` keeps a thin
+delegator.
 
 - **Depends on:** Phase 2. **Risk:** low.
 
