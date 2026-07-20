@@ -32,6 +32,17 @@ def create(history, suffix="", at=None):
     )
 
 
+def confirm(history, match_id, winner, suffix):
+    history.report_winner(
+        10, match_id, captain_id=1, winner=winner,
+        operation_id=f"{suffix}-captain-one",
+    )
+    return history.report_winner(
+        10, match_id, captain_id=3, winner=winner,
+        operation_id=f"{suffix}-captain-two",
+    )
+
+
 def test_captains_confirm_same_winner_idempotently(history):
     create(history)
     first = history.report_winner(
@@ -62,6 +73,11 @@ def test_conflict_requires_organizer_resolution(history):
         operation_id="two",
     )
     assert disputed.outcome == MatchOutcome.DISPUTED
+    with pytest.raises(ValueError, match="organizer"):
+        history.report_winner(
+            10, "GF-1", captain_id=1, winner=MatchOutcome.TEAM_TWO,
+            operation_id="captain-rewrite",
+        )
     with pytest.raises(PermissionError):
         history.resolve(
             10, "GF-1", organizer_id=1, outcome=MatchOutcome.TEAM_ONE,
@@ -93,7 +109,7 @@ def test_rejects_non_captain_invalid_score_and_terminal_changes(history):
             10, "GF-1", captain_id=2, winner=MatchOutcome.TEAM_ONE,
             operation_id="not-captain",
         )
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="conflicting"):
         history.resolve(
             10, "GF-1", organizer_id=99, outcome=MatchOutcome.TEAM_ONE,
             operation_id="wrong-score", score=SeriesScore(0, 2),
@@ -111,15 +127,9 @@ def test_rejects_non_captain_invalid_score_and_terminal_changes(history):
 
 def test_guild_team_player_history_and_stats(history):
     create(history, "old", datetime(2026, 1, 1, tzinfo=timezone.utc))
-    history.resolve(
-        10, "GF-old", organizer_id=99, outcome=MatchOutcome.TEAM_ONE,
-        operation_id="old-result",
-    )
+    confirm(history, "GF-old", MatchOutcome.TEAM_ONE, "old-result")
     create(history, "new", datetime(2026, 1, 2, tzinfo=timezone.utc))
-    history.resolve(
-        10, "GF-new", organizer_id=99, outcome=MatchOutcome.TEAM_TWO,
-        operation_id="new-result",
-    )
+    confirm(history, "GF-new", MatchOutcome.TEAM_TWO, "new-result")
     assert [m.match_id for m in history.recent_for_guild(10)] == ["GF-new", "GF-old"]
     assert len(history.recent_for_team(10, "blue")) == 2
     assert len(history.recent_for_player(10, 1)) == 2
@@ -145,6 +155,53 @@ def test_operation_id_cannot_be_reused_for_different_input(history):
             10, "GF-1", organizer_id=99, outcome=MatchOutcome.CANCELLED,
             operation_id="create-1",
         )
+
+
+def test_create_retry_rejects_changed_roster_or_draft_reference(history):
+    create(history)
+    with pytest.raises(ValueError, match="operation ID"):
+        history.create(
+            guild_id=10, organizer_id=99, match_id="GF-1",
+            operation_id="create-1", draft_reference="DIFFERENT",
+            team_one=team("Blue", 1, (1, "solo"), (5, "jungle")),
+            team_two=team("Red", 3, (3, "mid"), (4, "support")),
+        )
+
+
+def test_player_history_filters_before_limit(history):
+    old = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    history.create(
+        guild_id=10, organizer_id=99, match_id="GF-player",
+        operation_id="create-player", at=old,
+        team_one=team("Blue", 1, (1, "solo")),
+        team_two=team("Red", 3, (3, "mid")),
+    )
+    with history._transaction() as conn:
+        for index in range(501):
+            match_id = f"GF-noise-{index:03d}"
+            timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc).isoformat()
+            conn.execute(
+                """INSERT INTO godforge_matches
+                   (match_id,guild_id,organizer_id,team_one_json,team_two_json,
+                    outcome,created_at,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?)""",
+                (
+                    match_id, 10, 99,
+                    history._team(team("Noise Blue", 11, (11, "solo"))),
+                    history._team(team("Noise Red", 13, (13, "mid"))),
+                    MatchOutcome.PENDING, timestamp, timestamp,
+                ),
+            )
+            conn.execute(
+                """INSERT INTO godforge_match_participants
+                   (guild_id,match_id,user_id,team_number,role)
+                   VALUES (?,?,?,?,?)""",
+                (10, match_id, 11, 1, "solo"),
+            )
+
+    assert [record.match_id for record in history.recent_for_player(10, 1)] == [
+        "GF-player"
+    ]
 
 
 def test_same_external_match_id_is_isolated_between_guilds(history):

@@ -180,6 +180,18 @@ class MatchHistoryRepository:
             );
             CREATE INDEX IF NOT EXISTS godforge_matches_guild_recent
               ON godforge_matches(guild_id, created_at DESC);
+            CREATE TABLE IF NOT EXISTS godforge_match_participants (
+              guild_id INTEGER NOT NULL,
+              match_id TEXT NOT NULL,
+              user_id INTEGER NOT NULL,
+              team_number INTEGER NOT NULL,
+              role TEXT NOT NULL DEFAULT '',
+              PRIMARY KEY(guild_id, match_id, user_id),
+              FOREIGN KEY(guild_id, match_id)
+                REFERENCES godforge_matches(guild_id, match_id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS godforge_match_player_recent
+              ON godforge_match_participants(guild_id, user_id, match_id);
             CREATE TABLE IF NOT EXISTS godforge_result_confirmations (
               guild_id INTEGER NOT NULL,
               match_id TEXT NOT NULL,
@@ -214,7 +226,13 @@ class MatchHistoryRepository:
         match_id = match_id or uuid.uuid5(
             uuid.NAMESPACE_URL, f"godforge:history:{guild_id}:{operation_id}"
         ).hex
-        fingerprint = f"create:{guild_id}:{match_id}:{organizer_id}"
+        team_one_json = self._team(team_one)
+        team_two_json = self._team(team_two)
+        canonical_draft_reference = draft_reference.strip() if draft_reference else None
+        fingerprint = (
+            f"create:{guild_id}:{match_id}:{organizer_id}:{team_one_json}:"
+            f"{team_two_json}:{canonical_draft_reference or ''}"
+        )
         with self._transaction() as conn:
             prior = self._operation(conn, operation_id, fingerprint)
             if prior:
@@ -222,7 +240,7 @@ class MatchHistoryRepository:
             now = at or utc_now()
             record = MatchRecord(
                 match_id, guild_id, organizer_id, team_one, team_two,
-                draft_reference.strip() if draft_reference else None,
+                canonical_draft_reference,
                 created_at=now, updated_at=now,
             )
             conn.execute(
@@ -231,10 +249,20 @@ class MatchHistoryRepository:
                     draft_reference,outcome,created_at,updated_at)
                    VALUES (?,?,?,?,?,?,?,?,?)""",
                 (
-                    record.match_id, guild_id, organizer_id, self._team(team_one),
-                    self._team(team_two), record.draft_reference, record.outcome,
+                    record.match_id, guild_id, organizer_id, team_one_json,
+                    team_two_json, record.draft_reference, record.outcome,
                     _time(now), _time(now),
                 ),
+            )
+            conn.executemany(
+                """INSERT INTO godforge_match_participants
+                   (guild_id,match_id,user_id,team_number,role)
+                   VALUES (?,?,?,?,?)""",
+                [
+                    (guild_id, match_id, player.user_id, team_number, player.role)
+                    for team_number, team in ((1, team_one), (2, team_two))
+                    for player in team.players
+                ],
             )
             self._save_operation(conn, operation_id, fingerprint, match_id, now)
             return record
@@ -260,6 +288,8 @@ class MatchHistoryRepository:
             record = self._require(conn, match_id, guild_id)
             if record.outcome in TERMINAL_OUTCOMES:
                 raise ValueError("match already has a terminal outcome")
+            if record.outcome is MatchOutcome.DISPUTED:
+                raise ValueError("disputed matches require organizer resolution")
             captains = {record.team_one.captain_id, record.team_two.captain_id}
             if captain_id not in captains:
                 raise PermissionError("only a team captain can confirm the winner")
@@ -317,6 +347,13 @@ class MatchHistoryRepository:
                 raise PermissionError("only the organizer can resolve this match")
             if record.outcome in TERMINAL_OUTCOMES:
                 raise ValueError("match already has a terminal outcome")
+            if (
+                outcome in {MatchOutcome.TEAM_ONE, MatchOutcome.TEAM_TWO}
+                and record.outcome is not MatchOutcome.DISPUTED
+            ):
+                raise ValueError(
+                    "organizer winner resolution requires conflicting captain reports"
+                )
             if outcome in {MatchOutcome.TEAM_ONE, MatchOutcome.TEAM_TWO}:
                 if score:
                     self._validate_score(outcome, score)
@@ -341,8 +378,21 @@ class MatchHistoryRepository:
     def recent_for_player(
         self, guild_id: int, user_id: int, limit: int = 10
     ) -> list[MatchRecord]:
-        records = self.recent_for_guild(guild_id, 500)
-        return [r for r in records if user_id in {p.user_id for p in r.participants}][:limit]
+        if not 1 <= limit <= 500:
+            raise ValueError("limit must be between 1 and 500")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """SELECT m.match_id,m.guild_id
+                   FROM godforge_matches m
+                   JOIN godforge_match_participants p
+                     ON p.guild_id=m.guild_id AND p.match_id=m.match_id
+                   WHERE p.guild_id=? AND p.user_id=?
+                   ORDER BY m.created_at DESC,m.match_id DESC LIMIT ?""",
+                (guild_id, user_id, limit),
+            ).fetchall()
+            return [
+                self._require(conn, row["match_id"], row["guild_id"]) for row in rows
+            ]
 
     def recent_for_team(
         self, guild_id: int, team_name: str, limit: int = 10
