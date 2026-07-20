@@ -344,18 +344,18 @@ rates, and documented moderation, appeal, privacy, and retention policies.
 Each tracker issue should be a thin, independently verifiable vertical slice.
 
 1. Establish the party-lobby domain model, durable state, and recovery path.
-2. Complete permission-safe guild setup and publish a persistent Play panel.
-3. Provision and reconcile self-assignable GodForge cosmetic roles.
-4. Deliver create, browse, join, leave, and preference flows.
-5. Add capacity, waitlist, compatible substitute promotion, and ready checks.
-6. Create and reconcile temporary party/team rooms.
-7. Convert a ready lobby into the existing fearless draft.
-8. Add standalone result confirmation and match history.
-9. Add role-aware balance and captains-based player drafting.
-10. Add rematch, shuffle, substitute, and re-queue actions.
-11. Add scheduled sessions that convert into live lobbies.
-12. Add team rosters and scrim challenges.
-13. Isolate and feature-gate the optional ForgeLens adapter.
+2. Isolate and feature-gate the optional ForgeLens adapter.
+3. Complete permission-safe guild setup and publish a persistent Play panel.
+4. Provision and reconcile self-assignable GodForge cosmetic roles.
+5. Deliver create, browse, join, leave, and preference flows.
+6. Add capacity, waitlist, compatible substitute promotion, and ready checks.
+7. Create and reconcile temporary party/team rooms.
+8. Convert a ready lobby into the existing fearless draft.
+9. Add standalone result confirmation and match history.
+10. Add role-aware balance and captains-based player drafting.
+11. Add rematch, shuffle, substitute, and re-queue actions.
+12. Add scheduled sessions that convert into live lobbies.
+13. Add team rosters and scrim challenges.
 
 New Discord interactions should be extracted from the already-large `bot.py`.
 Use a Discord adapter/cog layer over pure party, balancing, and match services.
@@ -363,8 +363,9 @@ Model lobby transitions explicitly:
 
 ```text
 open -> full -> ready_check -> forming -> active -> completed
-                                                \-> cancelled
-                                                \-> expired
+
+open | full | ready_check | forming | active -> cancelled
+open | full | ready_check                    -> expired
 ```
 
 Discord message and channel IDs are delivery references, not domain identity.

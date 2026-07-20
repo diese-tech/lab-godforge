@@ -323,7 +323,9 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 - Move single-tenant constants into guild-scoped config.
 - Add a safer durable backing store for orchestration data where JSON is too fragile.
 - Improve draft and match recovery after restarts.
-- Keep GodForge focused on live draft operations while ForgeLens owns OCR, stats, results, betting, and ledgers.
+- Add standalone party formation, lightweight results, and game-night history.
+- Keep ForgeLens as an optional disabled-by-default compatibility adapter;
+  economy and betting remain out of scope.
 
 ## Contributing / Development Notes
 
