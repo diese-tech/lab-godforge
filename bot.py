@@ -27,7 +27,7 @@ from discord import app_commands
 from discord.ext import tasks
 from dotenv import load_dotenv
 
-from utils import custom_commands, formatter, loader, parser, picker, settings
+from utils import custom_commands, draft_support, formatter, loader, parser, picker, settings
 from utils.formatter import NUMBER_EMOJIS
 from utils.resolver import resolve_god_name
 from utils.session import SessionManager
@@ -237,24 +237,13 @@ def _cleanup_draft(channel_id: int) -> None:
         task.cancel()
 
 
+# Pure draft-command helpers are owned by utils/draft_support (Issue #48).
 def _draft_start_options(content: str) -> dict:
-    match = re.search(r"(?:^|\s)--match\s+(\S+)", content) if forgelens_enabled() else None
-    game = re.search(r"(?:^|\s)--game\s+(\d+)", content)
-    return {
-        "forgelens_match_id": match.group(1) if match else "",
-        "game_number": int(game.group(1)) if game else 1,
-    }
+    return draft_support.draft_start_options(content)
 
 
 def _draft_completion_marker(draft) -> str:
-    lines = [
-        "Draft complete",
-        f"draft_id={draft.draft_id}",
-        f"game_number={draft.current_game.game_number}",
-    ]
-    if forgelens_enabled():
-        lines.insert(2, f"forgelens_match_id={getattr(draft, 'forgelens_match_id', '')}")
-    return "\n".join(lines)
+    return draft_support.draft_completion_marker(draft)
 
 
 # ── Activity backend helpers ──────────────────────────────────────────────────
