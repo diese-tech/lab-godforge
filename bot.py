@@ -31,6 +31,8 @@ from utils.formatter import NUMBER_EMOJIS
 from utils.resolver import resolve_god_name
 from utils.session import SessionManager
 from utils.draft import DraftManager
+from utils.forgelens_adapter import ForgeLensAdapter, forgelens_enabled
+from utils.party_store import SQLitePartyRepository
 from utils import ledger as ledger_utils
 from utils import wallet as wallet_utils
 
@@ -66,6 +68,10 @@ client = discord.Client(intents=intents)
 
 sessions = SessionManager()
 drafts = DraftManager()
+party_repository = SQLitePartyRepository(
+    os.getenv("GODFORGE_PARTY_DB_PATH", "data/godforge_party.db")
+)
+forgelens_adapter = ForgeLensAdapter()
 
 # Track metadata for reaction-enabled messages (sessions only).
 _tracked_messages = {}
@@ -133,7 +139,7 @@ def _cleanup_draft(channel_id: int) -> None:
 
 
 def _draft_start_options(content: str) -> dict:
-    match = re.search(r"(?:^|\s)--match\s+(\S+)", content)
+    match = re.search(r"(?:^|\s)--match\s+(\S+)", content) if forgelens_enabled() else None
     game = re.search(r"(?:^|\s)--game\s+(\d+)", content)
     return {
         "forgelens_match_id": match.group(1) if match else "",
@@ -142,14 +148,14 @@ def _draft_start_options(content: str) -> dict:
 
 
 def _draft_completion_marker(draft) -> str:
-    return "\n".join(
-        [
-            "Draft complete",
-            f"draft_id={draft.draft_id}",
-            f"forgelens_match_id={getattr(draft, 'forgelens_match_id', '')}",
-            f"game_number={draft.current_game.game_number}",
-        ]
-    )
+    lines = [
+        "Draft complete",
+        f"draft_id={draft.draft_id}",
+        f"game_number={draft.current_game.game_number}",
+    ]
+    if forgelens_enabled():
+        lines.insert(2, f"forgelens_match_id={getattr(draft, 'forgelens_match_id', '')}")
+    return "\n".join(lines)
 
 
 # ── Activity backend helpers ──────────────────────────────────────────────────
@@ -211,16 +217,16 @@ async def _post_export(export: dict, channel) -> None:
     draft_id = export.get("draftId") or export.get("draft_id", "unknown")
     embed = formatter.format_draft_end_from_export(export)
     await channel.send(embed=embed)
-    await channel.send(
-        "\n".join(
-            [
-                "Draft complete",
-                f"draft_id={export.get('draft_id', draft_id)}",
-                f"forgelens_match_id={export.get('forgelens_match_id', '')}",
-                f"game_number={export.get('game_number', 1)}",
-            ]
+    completion_lines = [
+        "Draft complete",
+        f"draft_id={export.get('draft_id', draft_id)}",
+        f"game_number={export.get('game_number', 1)}",
+    ]
+    if forgelens_enabled():
+        completion_lines.insert(
+            2, f"forgelens_match_id={export.get('forgelens_match_id', '')}"
         )
-    )
+    await channel.send("\n".join(completion_lines))
 
     filename = f"draft_{draft_id}.json"
     json_bytes = json.dumps(export, indent=2).encode("utf-8")
@@ -279,7 +285,10 @@ async def on_ready():
     log.info(f"Connected to {len(client.guilds)} guild(s)")
     if not cleanup_task.is_running():
         cleanup_task.start()
-    log.info("Economy commands are deprecated in GodForge; ForgeLens owns betting and ledgers.")
+    log.info("Economy and betting commands are disabled in standalone GodForge.")
+    recoverable_lobbies = party_repository.recover_active()
+    if recoverable_lobbies:
+        log.info("Recovered %s active party lobby record(s)", len(recoverable_lobbies))
 
     orphaned = _load_active_drafts()
     if orphaned:
@@ -996,8 +1005,8 @@ def _is_admin(message: discord.Message) -> bool:
 async def _handle_deprecated_economy_command(message: discord.Message, command: str):
     await message.channel.send(
         f"⚠️ `.{command}` is deprecated in GodForge. "
-        "ForgeLens owns betting, wallets, ledgers, results, and OCR/stat workflows. "
-        "Use GodForge draft commands for match orchestration and JSON handoff."
+        "Economy, wallets, ledgers, and betting are not available in standalone "
+        "GodForge. Use GodForge for parties, randomizers, sessions, and drafts."
     )
 
 

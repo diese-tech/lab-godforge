@@ -4,13 +4,21 @@ Static landing page and admin portal for the Godforge Discord bot.
 
 This folder is intentionally separate from the Python bot runtime. It does not change `bot.py`, `requirements.txt`, `Procfile`, environment variables, or deployment settings.
 
-The dashboard now runs locally or through the combined Railway launcher. Public randomizer/build tools stay open, while admin actions use a temporary password session or staged Discord OAuth session. Dashboard settings, audit events, and custom command configs persist to JSON by default, or to SQLite when `GODFORGE_STORAGE=sqlite` is enabled. Future guild-scoped authorization, bot-side custom command execution, and production asset work are tracked in `TODO.md`.
+The dashboard runs locally or through the combined Railway launcher. Public
+randomizer/build tools stay open, while admin actions use a temporary password
+session or staged Discord OAuth session. Dashboard settings, audit events, and
+custom command configs persist to JSON by default, or to SQLite when
+`GODFORGE_STORAGE=sqlite` is enabled. Current gaps are tracked in `TODO.md`.
 
-Product-level release milestones are tracked in `../VERSION_HISTORY.md`. The ledger system is v2.0; dashboard bridge work is staged as v2.1.0 candidate work, to be tagged after OAuth and DB-backed dashboard basics are working.
+Product-level release milestones are tracked in `../VERSION_HISTORY.md`.
+GodForge `v2.3.0-rc.1` establishes the standalone product boundary; the web
+surface supports standalone utility, draft, settings, and command workflows.
 
 Release process details live in `../RELEASE_PROCESS.md`. The bot-visible version is controlled by `GODFORGE_VERSION` in `../utils/formatter.py` and appears at the bottom of `.help`.
 
-The optional local API in `../web_api` exposes a development-only bridge to the existing Godforge parser, loader, picker, draft, ledger, and wallet modules. When that API is not running, the website stays previewable with demo fallback data for god rolls, Roll Team, builds, matches, bets, and wallets.
+The optional local API in `../web_api` exposes a development bridge to the
+GodForge parser, loader, picker, draft, settings, and custom-command modules.
+When it is not running, the website remains previewable with utility demo data.
 
 ## Preview Locally
 
@@ -43,11 +51,13 @@ The local API runs at:
 http://localhost:8787
 ```
 
-With the API running, the dashboard random god, Roll Team (`.roll5`), build generator, command runner, draft room, match lifecycle, bet placement, prop resolution, and wallet panels use the same local Python modules as the Discord bot where implemented.
+With the API running, random god, Roll Team (`.roll5`), build generation,
+command configuration, and draft tools reuse the same Python modules as the bot.
 
 Admin-only dashboard actions require `GODFORGE_ADMIN_PASSWORD` when using `web_api/server.py` or the combined Railway launcher. Public randomizer and build endpoints remain available without login.
 
-After login, the Overview panel includes a MEE6-style operations monitor with bot status, guild count, ledger state, wallet count, active draft rooms, a managed-server selector grid, module health, recent admin activity, and a manual Discord ledger embed sync action. The sync control only queues a real Discord refresh when the API and bot are running together through `railway_app.py`.
+After login, the Overview panel includes bot status, guild count, active draft
+rooms, a managed-server selector grid, module health, and recent admin activity.
 
 The Settings module now saves temporary guild defaults to `data/guild_settings.json`: feature toggles, channel names, and admin/captain role labels. This is the staging surface for the future Discord OAuth server picker and database-backed guild settings.
 

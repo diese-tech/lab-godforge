@@ -9,8 +9,10 @@ The bot.py handler checks the return type and sends accordingly.
 import re
 import discord
 
+from utils.forgelens_adapter import forgelens_enabled
 
-GODFORGE_VERSION = "2.2.0"
+
+GODFORGE_VERSION = "2.3.0-rc.1"
 RELEASE_NOTES = "Release notes: VERSION_HISTORY.md"
 
 # Buff-themed role colors (Smite 2 has no green buff; support takes green).
@@ -262,18 +264,25 @@ def format_help_page1() -> discord.Embed:
         "_Aliases work: `.ban mlf`, `.pick baron`_"
     ), inline=False)
 
-    embed.set_footer(text=f"Page 1/2 — GodForge v{GODFORGE_VERSION} • use ➡️ for deprecated economy notes • {RELEASE_NOTES}")
+    embed.set_footer(text=f"Page 1/2 — GodForge v{GODFORGE_VERSION} • use ➡️ for usage tips • {RELEASE_NOTES}")
     return embed
 
 
 def format_help_page2() -> discord.Embed:
-    """Page 2 of the help embed: deprecated economy surface."""
-    embed = discord.Embed(title="GodForge Commands — Deprecated Economy", color=0x95A5A6)
+    """Page 2 of the help embed: standalone usage tips."""
+    embed = discord.Embed(title="GodForge Commands — Usage Tips", color=0x3498DB)
 
-    embed.add_field(name="Moved to ForgeLens", value=(
-        "`.match`, `.bet`, `.wallet`, and `.ledger` are deprecated in GodForge.\n"
-        "ForgeLens owns betting, wallets, ledgers, results, OCR, and stat workflows.\n"
-        "Use `.draft start @blue @red` and `.draft end` for match orchestration and JSON handoff."
+    embed.add_field(name="Pick a role", value=(
+        "Use `j`, `m`, `a`, `s`, or `o` after `.rg` and `.roll5` for "
+        "jungle, mid, ADC, support, or solo."
+    ), inline=False)
+    embed.add_field(name="Pick a source", value=(
+        "Add `w` for the curated website pool or `t` for the in-game tab pool.\n"
+        "Example: `.rgjt` rolls a jungle god from the tab source."
+    ), inline=False)
+    embed.add_field(name="Run a draft", value=(
+        "Start with `.draft start @blue @red`, then captains use `.ban` and `.pick`.\n"
+        "Use `.draft show`, `.draft undo`, `.draft next`, and `.draft end` to manage the set."
     ), inline=False)
 
     embed.set_footer(text=f"Page 2/2 — GodForge v{GODFORGE_VERSION} • use ⬅️ for main commands • {RELEASE_NOTES}")
@@ -311,6 +320,8 @@ def _forgelens_status_value(draft_status: str, draft_id: str, forgelens_match_id
 def _add_forgelens_status_field(embed: discord.Embed, draft_status: str, draft_id: str,
                                 forgelens_match_id: str, game_number: int,
                                 draft_sequence: int) -> None:
+    if not forgelens_enabled():
+        return
     embed.add_field(
         name="ForgeLens Status",
         value=_forgelens_status_value(

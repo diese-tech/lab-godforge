@@ -1,7 +1,24 @@
 # GodForge Standalone Product Plan
 
-Status: proposed implementation plan  
+Status: approved and in implementation (`v2.3.0-rc.1`)
 Last updated: July 20, 2026
+
+## Implementation tracker
+
+- Foundation: [#18](https://github.com/diese-tech/lab-godforge/issues/18)
+  durable lobby lifecycle and
+  [#30](https://github.com/diese-tech/lab-godforge/issues/30) optional
+  compatibility isolation.
+- Zero-config onboarding:
+  [#19](https://github.com/diese-tech/lab-godforge/issues/19) guild setup and
+  [#20](https://github.com/diese-tech/lab-godforge/issues/20) managed cosmetic
+  roles.
+- Core lobby loop:
+  [#21](https://github.com/diese-tech/lab-godforge/issues/21) through
+  [#27](https://github.com/diese-tech/lab-godforge/issues/27).
+- Game-night expansion:
+  [#28](https://github.com/diese-tech/lab-godforge/issues/28) scheduling and
+  [#29](https://github.com/diese-tech/lab-godforge/issues/29) team/scrim tools.
 
 ## Product direction
 
