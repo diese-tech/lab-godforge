@@ -28,4 +28,19 @@ for (const id of requiredIds) {
   }
 }
 
+const forbiddenStandaloneCopy = [
+  "data-dashboard-tab=\"betting\"",
+  "id=\"setting-betting-enabled\"",
+  "id=\"setting-betting-channel\"",
+  "id=\"wallet-adjust-form\"",
+  "id=\"ledger-reset-button\"",
+  "Betting open",
+];
+
+for (const marker of forbiddenStandaloneCopy) {
+  if (html.includes(marker)) {
+    throw new Error(`Legacy economy surface is still active: ${marker}`);
+  }
+}
+
 console.log("Dashboard static checks passed.");
