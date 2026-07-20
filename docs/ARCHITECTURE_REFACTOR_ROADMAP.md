@@ -69,9 +69,11 @@ lifecycle (the draft-restart notice becomes a lifecycle hook).
   JSON persistence.
 - **3b (DONE)** — `utils/session_commands.SessionCommandHandler` owns the
   `.session` command family.
-- **3c (TODO)** — draft command handlers (`.draft` local + activity), the draft
-  board renderer, the WS listener, and the draft reaction handler; the
-  draft-restart notice becomes a lifecycle hook.
+- **3c (PARTIAL)** — DONE: `utils/draft_render.DraftRenderer` owns the board and
+  claim-embed rendering; `utils/activity_backend.ActivityBackendClient` owns the
+  activity-backend HTTP surface. TODO: the draft command handlers (`.draft` local
+  + activity) and the draft reaction/WS dispatch, and turning the draft-restart
+  notice into a lifecycle hook.
 - **Depends on:** Phases 1–2. **Risk:** medium (reaction handlers, WS listener,
   activity-backend + `_match_ids`/`_ws_tasks` shared state).
 
