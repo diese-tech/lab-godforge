@@ -13,6 +13,8 @@ Use these files as the canonical sources:
   custom nights, reminders, ICS export, and live-lobby conversion.
 - [`MATCH_CONTINUITY.md`](MATCH_CONTINUITY.md) - idempotent rematches,
   shuffles, substitutes, queue returns, and series continuation.
+- [`TEAM_SCRIMS.md`](TEAM_SCRIMS.md) - guild teams, captain challenges,
+  roster locks, and handoff into the existing party workflow.
 - [`../VERSION_HISTORY.md`](../VERSION_HISTORY.md) — released and candidate
   milestones.
 - [`../RELEASE_PROCESS.md`](../RELEASE_PROCESS.md) — release gates and tagging.

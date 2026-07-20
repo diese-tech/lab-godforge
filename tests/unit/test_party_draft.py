@@ -3,7 +3,12 @@ from dataclasses import replace
 import pytest
 
 from utils.party import LobbyState, Participant, PartyLobby
-from utils.party_draft import PartyDraftError, PartyDraftLaunchRepository, form_teams
+from utils.party_draft import (
+    DraftTeam,
+    PartyDraftError,
+    PartyDraftLaunchRepository,
+    form_teams,
+)
 from utils.draft import DraftManager
 from utils.match_history import MatchHistoryRepository
 
@@ -72,6 +77,27 @@ def test_launch_is_idempotent_and_retains_party_context(tmp_path):
     assert first.snapshot["formation"]["mode"] == "role_fit"
     assert first.snapshot["formation"]["first_choices"] == 10
     assert len(first.snapshot["formation"]["blue"]) == 5
+
+
+def test_fixed_premade_teams_preserve_interleaved_roster_partition(tmp_path):
+    repo = PartyDraftLaunchRepository(tmp_path / "party.db")
+    blue_ids = (1, 3, 5, 7, 9)
+    red_ids = (2, 4, 6, 8, 10)
+    roles = ("solo", "jungle", "mid", "support", "adc")
+    launch, _ = repo.begin(
+        _ready_lobby(), operation_id="scrim-launch", channel_id=500,
+        match_id_factory=lambda: "GF-SCRIM",
+        fixed_teams=(
+            DraftTeam(1, blue_ids, tuple(zip(blue_ids, roles, strict=True))),
+            DraftTeam(2, red_ids, tuple(zip(red_ids, roles, strict=True))),
+        ),
+    )
+    assert launch.blue.participant_ids == blue_ids
+    assert launch.red.participant_ids == red_ids
+    assert launch.snapshot["formation"]["mode"] == "premade_scrim"
+    assert [item["user_id"] for item in launch.snapshot["formation"]["blue"]] == list(
+        blue_ids
+    )
 
 
 def test_launch_snapshot_retains_godforge_owned_balance_inputs(tmp_path):

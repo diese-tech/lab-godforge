@@ -61,10 +61,35 @@ def form_teams_with_result(
     *,
     mode: FormationMode | str = FormationMode.ROLE_FIT,
     organizer_inputs: dict[int, dict[str, object]] | None = None,
-) -> tuple[DraftTeam, DraftTeam, FormationResult]:
+    fixed_teams: tuple[DraftTeam, DraftTeam] | None = None,
+) -> tuple[DraftTeam, DraftTeam, FormationResult | dict[str, object]]:
     """Make deterministic, role-complete teams from GodForge-owned inputs."""
     if lobby.state is not LobbyState.FORMING:
         raise PartyDraftError("the lobby must finish its ready check first")
+    if fixed_teams is not None:
+        blue, red = fixed_teams
+        lobby_ids = {member.user_id for member in lobby.participants}
+        blue_ids, red_ids = set(blue.participant_ids), set(red.participant_ids)
+        if (
+            len(blue_ids) != 5 or len(red_ids) != 5
+            or blue_ids & red_ids or blue_ids | red_ids != lobby_ids
+            or blue.captain_id not in blue_ids or red.captain_id not in red_ids
+        ):
+            raise PartyDraftError(
+                "fixed teams must partition the ten lobby players into two captain-led sides"
+            )
+        return blue, red, {
+            "mode": "premade_scrim",
+            "explanation": "Locked premade scrim rosters were preserved.",
+            "blue": [
+                {"user_id": user_id, "role": role}
+                for user_id, role in blue.role_assignments
+            ],
+            "red": [
+                {"user_id": user_id, "role": role}
+                for user_id, role in red.role_assignments
+            ],
+        }
     try:
         result = form_smite_teams(
             profiles_from_preferences(
@@ -130,10 +155,11 @@ class PartyDraftLaunchRepository:
         match_id_factory: Callable[[], str],
         formation_mode: FormationMode | str = FormationMode.ROLE_FIT,
         organizer_inputs: dict[int, dict[str, object]] | None = None,
+        fixed_teams: tuple[DraftTeam, DraftTeam] | None = None,
     ) -> tuple[PartyDraftLaunch, bool]:
         blue, red, formation = form_teams_with_result(
             lobby,
-            mode=formation_mode,
+            mode=formation_mode, fixed_teams=fixed_teams,
             organizer_inputs=organizer_inputs,
         )
         snapshot = _snapshot(lobby, formation)
@@ -249,7 +275,7 @@ class PartyDraftLaunchRepository:
 
 
 def _snapshot(
-    lobby: PartyLobby, formation: FormationResult | None = None
+    lobby: PartyLobby, formation: FormationResult | dict[str, object] | None = None
 ) -> dict[str, object]:
     return {
         "lobby_id": lobby.lobby_id,
@@ -274,7 +300,10 @@ def _snapshot(
             }
             for player in lobby.participants
         ],
-        "formation": _formation_snapshot(formation) if formation else None,
+        "formation": (
+            formation if isinstance(formation, dict)
+            else _formation_snapshot(formation) if formation else None
+        ),
     }
 
 
