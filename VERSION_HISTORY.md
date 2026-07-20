@@ -67,6 +67,12 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
   cannot block core GodForge work if delivery fails.
 - **Command-page cleanup**: Discord help and the public feature/command area
   describe only active standalone functionality.
+- **Zero-config guild setup**: `/party setup` verifies permissions, creates or
+  refreshes stored-ID-managed Play resources, and supports a short-lived test
+  mode.
+- **Managed role cosmetics**: permissionless role cosmetics and restart-safe
+  self-assignment buttons project durable GodForge player preferences onto
+  Discord roles without adopting same-named administrator roles.
 
 ## Future Version Gates
 
