@@ -194,6 +194,38 @@ class MatchContinuityRepository:
             ).fetchone()
         return _decode(row)
 
+    def complete_substitutes(
+        self, guild_id: int, result: ContinuityResult
+    ) -> ContinuityResult:
+        with self.transaction() as conn:
+            current = conn.execute(
+                "SELECT status FROM match_continuity "
+                "WHERE guild_id=? AND source_match_id=?",
+                (guild_id, result.source_match_id),
+            ).fetchone()
+            if current is None:
+                raise ContinuityError("continuity decision is unavailable")
+            if current["status"] != ContinuityStatus.AWAITING_SUBSTITUTES:
+                return self.get(guild_id, result.source_match_id)
+            conn.execute(
+                """UPDATE match_continuity
+                   SET status=?,next_match_id=?,team_one_json=?,team_two_json=?,
+                       changes_json=?,promoted_ids_json=?
+                   WHERE guild_id=? AND source_match_id=?""",
+                (
+                    result.status, result.next_match_id,
+                    _team_json(result.team_one), _team_json(result.team_two),
+                    json.dumps([asdict(change) for change in result.changes]),
+                    json.dumps(result.promoted_ids),
+                    guild_id, result.source_match_id,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM match_continuity WHERE guild_id=? AND source_match_id=?",
+                (guild_id, result.source_match_id),
+            ).fetchone()
+            return _decode(row)
+
 
 class MatchContinuityService:
     def __init__(
@@ -227,12 +259,46 @@ class MatchContinuityService:
                 raise ContinuityError(
                     f"{prior.action.value.replace('_', ' ')} already selected"
                 )
+            if prior.status is ContinuityStatus.AWAITING_SUBSTITUTES:
+                departures = {
+                    change.user_id
+                    for change in prior.changes
+                    if change.previous_team is not None and change.next_team is None
+                }
+                resumed = await self._build_result(
+                    record, lobby_id, action, departures
+                )
+                if resumed.status is ContinuityStatus.AWAITING_SUBSTITUTES:
+                    return prior
+                prior = self.repository.complete_substitutes(
+                    record.guild_id, resumed
+                )
             return await self._project(record.guild_id, prior)
 
         queue = await self.queue_service.get(lobby_id)
         if queue is None:
             raise ContinuityError("the source lobby queue is unavailable")
         departures = set(departing_ids)
+        result = await self._build_result(record, lobby_id, action, departures)
+        result, created = self.repository.reserve(
+            record.guild_id, result, operation_id
+        )
+        if result.status is ContinuityStatus.AWAITING_SUBSTITUTES:
+            return result
+        if not created:
+            return await self._project(record.guild_id, result)
+        return await self._project(record.guild_id, result)
+
+    async def _build_result(
+        self,
+        record: MatchRecord,
+        lobby_id: str,
+        action: ContinuityAction,
+        departures: set[int],
+    ) -> ContinuityResult:
+        queue = await self.queue_service.get(lobby_id)
+        if queue is None:
+            raise ContinuityError("the source lobby queue is unavailable")
         roster = [
             player for player in record.participants if player.user_id not in departures
         ]
@@ -255,10 +321,20 @@ class MatchContinuityService:
                 record.match_id, None, lobby_id, action, ContinuityStatus.QUEUED,
                 None, None, (),
             )
-        elif action is ContinuityAction.INVITE_SUBSTITUTES or len(roster) < 10:
+        elif len(roster) < 10:
+            before = {
+                player.user_id: (number, player.role)
+                for number, team in ((1, record.team_one), (2, record.team_two))
+                for player in team.players
+            }
             result = ContinuityResult(
                 record.match_id, None, lobby_id, action,
-                ContinuityStatus.AWAITING_SUBSTITUTES, None, None, (),
+                ContinuityStatus.AWAITING_SUBSTITUTES, None, None,
+                tuple(
+                    AssignmentChange(user_id, before[user_id][0], None,
+                                     before[user_id][1], "")
+                    for user_id in sorted(departures)
+                ),
                 tuple(promoted),
             )
         else:
@@ -282,12 +358,7 @@ class MatchContinuityService:
                 _changes(record, team_one, team_two), tuple(promoted),
             )
 
-        result, created = self.repository.reserve(
-            record.guild_id, result, operation_id
-        )
-        if not created:
-            return await self._project(record.guild_id, result)
-        return await self._project(record.guild_id, result)
+        return result
 
     async def _project(
         self, guild_id: int, result: ContinuityResult
@@ -348,8 +419,24 @@ def _teams(record: MatchRecord, roster: list[MatchPlayer], *, shuffle: bool):
         for player in newcomers:
             (first if len(first) < 5 else second).append(player)
         return (
-            MatchTeam("Blue", first[0].user_id, tuple(first)),
-            MatchTeam("Red", second[0].user_id, tuple(second)),
+            MatchTeam(
+                "Blue",
+                (
+                    record.team_one.captain_id
+                    if record.team_one.captain_id in {p.user_id for p in first}
+                    else first[0].user_id
+                ),
+                tuple(first),
+            ),
+            MatchTeam(
+                "Red",
+                (
+                    record.team_two.captain_id
+                    if record.team_two.captain_id in {p.user_id for p in second}
+                    else second[0].user_id
+                ),
+                tuple(second),
+            ),
         )
     formation = form_smite_teams(
         (

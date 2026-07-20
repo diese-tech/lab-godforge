@@ -285,3 +285,54 @@ def test_series_control_can_be_omitted_from_specific_result_card():
     # Startup registers the full persistent routing table.
     persistent_router = MatchContinuityView(handler)
     assert "Continue Series" in [item.label for item in persistent_router.children]
+
+
+@pytest.mark.asyncio
+async def test_invite_substitutes_reaches_ready_when_roster_is_complete(tmp_path):
+    continuity, _ = await service(tmp_path)
+    result = await continuity.continue_match(
+        completed_match(), lobby_id="lobby-1",
+        action="invite_substitutes", operation_id="invite-complete",
+    )
+    assert result.status is ContinuityStatus.READY
+    assert result.next_match_id
+
+
+@pytest.mark.asyncio
+async def test_invite_substitutes_resumes_after_more_players_join(tmp_path):
+    continuity, queue = await service(tmp_path)
+    await queue.join("lobby-1", 11, ("solo",))
+    waiting = await continuity.continue_match(
+        completed_match(), lobby_id="lobby-1",
+        action="invite_substitutes", operation_id="invite-wait",
+        departing_ids=(1, 2),
+    )
+    assert waiting.status is ContinuityStatus.AWAITING_SUBSTITUTES
+    assert not waiting.queue_projected
+
+    await queue.join("lobby-1", 12, ("jungle",))
+    ready = await continuity.continue_match(
+        completed_match(), lobby_id="lobby-1",
+        action="invite_substitutes", operation_id="invite-retry",
+    )
+    assert ready.status is ContinuityStatus.READY
+    assert ready.next_match_id
+    assert ready.queue_projected and ready.rooms_projected and ready.draft_projected
+
+
+@pytest.mark.asyncio
+async def test_run_it_back_preserves_captains_not_tuple_position(tmp_path):
+    continuity, _ = await service(tmp_path)
+    original = completed_match()
+    record = MatchRecord(
+        original.match_id, original.guild_id, original.organizer_id,
+        MatchTeam("Blue", 5, original.team_one.players),
+        MatchTeam("Red", 10, original.team_two.players),
+        outcome=original.outcome,
+    )
+    result = await continuity.continue_match(
+        record, lobby_id="lobby-1",
+        action="run_it_back", operation_id="captains",
+    )
+    assert result.team_one.captain_id == 5
+    assert result.team_two.captain_id == 10

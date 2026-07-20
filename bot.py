@@ -3268,15 +3268,17 @@ async def _handle_match_continuity_action(
         )
         return
 
-    async def reconcile_rooms(lobby_id, _participant_ids):
+    async def reconcile_rooms(lobby_id, participant_ids):
         rooms = match_room_repository.get(lobby_id)
         if rooms is None or not rooms.resource_ids:
             return False
-        await _match_room_service_for_guild(interaction.guild).reconcile(lobby_id)
+        room_service = _match_room_service_for_guild(interaction.guild)
+        await room_service.reconcile(lobby_id)
+        await room_service.reconcile_participants(lobby_id, participant_ids)
         return True
 
     async def create_next_match(result):
-        match_history_repository.create(
+        next_record = match_history_repository.create(
             guild_id=record.guild_id,
             organizer_id=record.organizer_id,
             team_one=result.team_one,
@@ -3288,6 +3290,17 @@ async def _handle_match_continuity_action(
             draft_reference=result.next_match_id,
             match_id=result.next_match_id,
         )
+        channel = interaction.channel
+        if channel is not None:
+            async for message in channel.history(limit=100):
+                embeds = getattr(message, "embeds", ())
+                footer = embeds[0].footer.text if embeds and embeds[0].footer else ""
+                if footer == f"match_id={next_record.match_id}":
+                    return
+            await channel.send(
+                embed=_match_result_embed(next_record),
+                view=MatchResultView(_handle_match_result_action),
+            )
 
     service = MatchContinuityService(
         match_continuity_repository,

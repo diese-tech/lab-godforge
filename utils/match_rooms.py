@@ -70,6 +70,14 @@ class MatchRoomOperations(Protocol):
 
     async def remove_player(self, resource_ids: tuple[int, ...], user_id: int) -> None: ...
 
+    async def sync_participants(
+        self,
+        resource_ids: tuple[int, ...],
+        participant_ids: tuple[int, ...],
+        removed_ids: tuple[int, ...],
+        locked: bool,
+    ) -> None: ...
+
     async def transfer_organizer(
         self,
         resource_ids: tuple[int, ...],
@@ -298,6 +306,21 @@ class MatchRoomService:
                 ),
             )
         )
+
+    async def reconcile_participants(
+        self, lobby_id: str, participant_ids: tuple[int, ...]
+    ) -> MatchRooms:
+        """Apply a continuity roster to both Discord permissions and storage."""
+        rooms = self._required(lobby_id)
+        desired = tuple(dict.fromkeys(participant_ids))
+        removed = tuple(set(rooms.participant_ids) - set(desired))
+        await self.operations.sync_participants(
+            rooms.resource_ids,
+            desired,
+            removed,
+            rooms.state is RoomState.LOCKED,
+        )
+        return self.repository.save(replace(rooms, participant_ids=desired))
 
     async def transfer(
         self, lobby_id: str, *, actor_id: int, new_organizer_id: int
