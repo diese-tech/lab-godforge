@@ -59,21 +59,22 @@ fallback until their own phases.
 - **Depends on:** Phase 1. **Risk:** low–medium (touches the hot `on_message`
   path). **Rollback:** revert the registry lookup; explicit routing returns.
 
-### Phase 3 — Sessions & local drafts feature (IN PROGRESS)
+### Phase 3 — Sessions & local drafts feature (DONE)
 
-Move `_handle_session`, `_handle_draft*`, draft board/reaction handlers, and the
-in-memory session/draft managers behind a feature with its own adapter and
-lifecycle (the draft-restart notice becomes a lifecycle hook).
-
-- **3a (DONE)** — `utils/active_drafts.ActiveDraftStore` owns the restart-pointer
-  JSON persistence.
-- **3b (DONE)** — `utils/session_commands.SessionCommandHandler` owns the
-  `.session` command family.
-- **3c (PARTIAL)** — DONE: `utils/draft_render.DraftRenderer` owns the board and
-  claim-embed rendering; `utils/activity_backend.ActivityBackendClient` owns the
-  activity-backend HTTP surface. TODO: the draft command handlers (`.draft` local
-  + activity) and the draft reaction/WS dispatch, and turning the draft-restart
-  notice into a lifecycle hook.
+- **3a** — `utils/active_drafts.ActiveDraftStore` owns the restart-pointer JSON
+  persistence.
+- **3b** — `utils/session_commands.SessionCommandHandler` owns the `.session`
+  command family.
+- **3c** — `utils/draft_render.DraftRenderer` (board/claim rendering),
+  `utils/activity_backend.ActivityBackendClient` (activity HTTP),
+  `utils/draft_support` (pure helpers), and `utils/draft_coordinator.
+  DraftCoordinator` (local + activity `.draft`/`.ban`/`.pick` handlers, activity
+  draft state, WS listener, export posting, claim reactions). `bot.py` keeps thin
+  delegators; the party-draft launch registers activity drafts through the
+  coordinator.
+- **Remaining polish:** the draft-restart notice in `on_ready` is still inline; it
+  can become a coordinator startup hook once `LifecycleContext` exposes a channel
+  lookup.
 - **Depends on:** Phases 1–2. **Risk:** medium (reaction handlers, WS listener,
   activity-backend + `_match_ids`/`_ws_tasks` shared state).
 
