@@ -73,6 +73,7 @@ from utils.scrims import (
     ScrimRepository,
     launch_scrim,
 )
+from utils.activity_backend import ActivityBackendClient
 from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
 from utils.draft_render import DraftRenderer
@@ -257,31 +258,21 @@ def _draft_completion_marker(draft) -> str:
 
 
 # ── Activity backend helpers ──────────────────────────────────────────────────
+# HTTP access to the optional draft activity backend is owned by the client
+# (Issue #48); bot.py keeps thin delegators for the existing call sites.
+activity_client = ActivityBackendClient(ACTIVITY_BACKEND_URL, ACTIVITY_API_KEY)
+
 
 def _activity_headers() -> dict:
-    return {"X-Api-Key": ACTIVITY_API_KEY, "Content-Type": "application/json"}
+    return activity_client.headers()
 
 
 async def _activity_post(path: str, data: dict | None = None) -> dict | None:
-    url = ACTIVITY_BACKEND_URL + path
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=data or {}, headers=_activity_headers()) as resp:
-                return await resp.json()
-    except Exception as e:
-        log.error(f"Activity backend POST {path} failed: {e}")
-        return None
+    return await activity_client.post(path, data)
 
 
 async def _activity_get(path: str) -> dict | None:
-    url = ACTIVITY_BACKEND_URL + path
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=_activity_headers()) as resp:
-                return await resp.json()
-    except Exception as e:
-        log.error(f"Activity backend GET {path} failed: {e}")
-        return None
+    return await activity_client.get(path)
 
 
 async def _update_embed_from_snapshot(snapshot: dict, channel) -> None:
