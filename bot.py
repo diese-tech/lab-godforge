@@ -73,6 +73,7 @@ from utils.scrims import (
     ScrimRepository,
     launch_scrim,
 )
+from utils.custom_command_runtime import CustomCommandRuntime
 from utils.lifecycle import FeatureRegistry, LifecycleContext
 from utils.routing import CommandRegistry
 from utils.r67.feature import R67Feature
@@ -180,7 +181,6 @@ command_registry = CommandRegistry()
 
 # Track metadata for reaction-enabled messages (sessions only).
 _tracked_messages = {}
-_custom_command_cooldowns: dict[tuple[str, str, int], float] = {}
 
 _ACTIVE_DRAFTS_FILE = os.path.join("data", "active_local_drafts.json")
 
@@ -1314,100 +1314,17 @@ command_registry.register(("match", "bet", "wallet", "ledger"), _deprecated_econ
 command_registry.register(("r67",), _handle_r67_command)
 
 
+# Custom-command execution is owned by the feature runtime (Issue #48). bot.py
+# constructs it with the shared admin check and keeps thin delegators so the
+# adapter boundary (and existing tests) stay stable.
+custom_command_runtime = CustomCommandRuntime(is_admin=_is_admin)
+# Backward-compatible alias for the per-user cooldown map (same object).
+_custom_command_cooldowns = custom_command_runtime.cooldowns
+
+
 async def _handle_custom_command(message: discord.Message, trigger: str) -> bool:
     """Execute a dashboard-configured custom command if one matches."""
-    if not trigger:
-        return False
-
-    guild = getattr(message, "guild", None)
-    guild_id = str(getattr(guild, "id", "") or custom_commands.DEFAULT_GUILD_ID)
-    clean_trigger = f".{trigger.lower()}"
-    command = _find_custom_command(guild_id, clean_trigger)
-    if not command:
-        return False
-    if not command.get("enabled", True):
-        return True
-
-    channel_gate = str(command.get("channel") or "").strip()
-    if channel_gate and not _custom_command_channel_matches(message, channel_gate):
-        await message.channel.send(f"⚠️ `{clean_trigger}` can only be used in {channel_gate}.")
-        return True
-
-    if not _custom_command_role_allowed(message, str(command.get("role_gate") or "Everyone")):
-        await message.channel.send("⚠️ You do not have permission to use this custom command.")
-        return True
-
-    retry_after = _custom_command_retry_after(message, guild_id, clean_trigger, str(command.get("cooldown") or "0s"))
-    if retry_after > 0:
-        await message.channel.send(f"⏳ `{clean_trigger}` is on cooldown for {retry_after}s.")
-        return True
-
-    response = str(command.get("response") or "").strip()
-    if not response:
-        return True
-
-    kwargs = {}
-    if hasattr(discord, "AllowedMentions"):
-        kwargs["allowed_mentions"] = discord.AllowedMentions.none()
-    await message.channel.send(response, **kwargs)
-    return True
-
-
-def _find_custom_command(guild_id: str, trigger: str) -> dict | None:
-    guild_commands = custom_commands.load_commands(guild_id)
-    fallback_commands = (
-        custom_commands.load_commands(custom_commands.DEFAULT_GUILD_ID)
-        if guild_id != custom_commands.DEFAULT_GUILD_ID else []
-    )
-    for command in guild_commands + fallback_commands:
-        if str(command.get("trigger") or "").lower() == trigger:
-            return command
-    return None
-
-
-def _custom_command_channel_matches(message: discord.Message, channel_gate: str) -> bool:
-    expected = channel_gate.strip().lower().lstrip("#")
-    channel = getattr(message, "channel", None)
-    channel_name = str(getattr(channel, "name", "") or "").lower()
-    channel_id = str(getattr(channel, "id", "") or "")
-    return expected in {channel_name, channel_id}
-
-
-def _custom_command_role_allowed(message: discord.Message, role_gate: str) -> bool:
-    if role_gate == "Everyone":
-        return True
-    if role_gate == "Admins":
-        return _is_admin(message)
-    if role_gate == "Captains":
-        if _is_admin(message):
-            return True
-        roles = getattr(message.author, "roles", []) or []
-        return any(str(getattr(role, "name", "")) == "Captains" for role in roles)
-    return False
-
-
-def _custom_command_retry_after(message: discord.Message, guild_id: str, trigger: str, cooldown: str) -> int:
-    seconds = _parse_cooldown_seconds(cooldown)
-    if seconds <= 0:
-        return 0
-
-    now = asyncio.get_running_loop().time()
-    key = (guild_id, trigger, int(getattr(message.author, "id", 0) or 0))
-    expires_at = _custom_command_cooldowns.get(key, 0)
-    if expires_at > now:
-        return max(1, int(expires_at - now))
-    _custom_command_cooldowns[key] = now + seconds
-    return 0
-
-
-def _parse_cooldown_seconds(value: str) -> int:
-    match = re.fullmatch(r"\s*(\d{1,4})\s*([smhSMH]?)\s*", str(value or ""))
-    if not match:
-        return 0
-    amount = int(match.group(1))
-    unit = match.group(2).lower() or "s"
-    multiplier = {"s": 1, "m": 60, "h": 3600}[unit]
-    return min(amount * multiplier, 3600)
+    return await custom_command_runtime.handle(message, trigger)
 
 
 def _extract_team_names(message: discord.Message) -> list[str]:
