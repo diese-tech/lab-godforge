@@ -151,9 +151,11 @@ class DraftState:
         game_number: int = 1,
         draft_sequence: int = 1,
         match_id: str | None = None,
+        party_context: dict | None = None,
     ):
         self.draft_id = match_id or match_ids.reserve_match_id()
         self.match_id = self.draft_id
+        self.party_context = dict(party_context or {})
         self.forgelens_match_id = forgelens_match_id or ""
         self.draft_sequence = draft_sequence
         self.active = True
@@ -305,6 +307,7 @@ class DraftState:
             "draft_id": self.draft_id,
             "forgelens_match_id": self.forgelens_match_id,
             "match_id": self.match_id,
+            "party": dict(self.party_context),
             "guild_id": self.guild_id,
             "guild_name": self.guild_name,
             "channel_id": self.channel_id,
@@ -363,6 +366,7 @@ class DraftManager:
         game_number: int = 1,
         draft_sequence: int = 1,
         match_id: str | None = None,
+        party_context: dict | None = None,
     ) -> DraftState | None:
         if channel_id in self._drafts and self._drafts[channel_id].active:
             return None
@@ -379,6 +383,7 @@ class DraftManager:
             game_number=game_number,
             draft_sequence=draft_sequence,
             match_id=match_id,
+            party_context=party_context,
         )
         self._drafts[channel_id] = draft
         return draft
