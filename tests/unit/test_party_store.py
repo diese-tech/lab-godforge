@@ -85,6 +85,25 @@ def test_operation_id_cannot_be_reused_for_another_command(tmp_path):
         repo.transition(1, "lobby", LobbyState.OPEN, operation_id="interaction")
 
 
+def test_same_state_transition_consumes_operation_id(tmp_path):
+    repo = repository(tmp_path)
+    repo.create(
+        guild_id=1, organizer_id=2, capacity=5, lobby_id="lobby",
+        operation_id="create",
+    )
+
+    unchanged = repo.transition(
+        1, "lobby", LobbyState.OPEN, operation_id="same-state",
+    )
+
+    assert unchanged.state == LobbyState.OPEN
+    assert repo.audit_events(1, "lobby")[-1].event_type == "state_transition_noop"
+    with pytest.raises(OperationConflictError):
+        repo.save_participant(
+            1, "lobby", Participant(3), operation_id="same-state",
+        )
+
+
 def test_delivery_references_can_be_reconciled_without_changing_identity(tmp_path):
     repo = repository(tmp_path)
     repo.create(
@@ -117,6 +136,45 @@ def test_terminal_lobbies_are_not_returned_for_recovery(tmp_path):
         )
     assert repo.recover_active(1) == []
     assert repo.audit_events(1, "lobby-0")[-1].metadata == {"reason": "test cleanup"}
+
+
+def test_recovery_expires_elapsed_recruitment_lobby(tmp_path):
+    repo = repository(tmp_path)
+    repo.create(
+        guild_id=1,
+        organizer_id=2,
+        capacity=5,
+        lobby_id="elapsed",
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        operation_id="create",
+    )
+
+    assert repo.recover_active(1) == []
+    expired = repo.get(1, "elapsed")
+    assert expired.state == LobbyState.EXPIRED
+    event = repo.audit_events(1, "elapsed")[-1]
+    assert event.event_type == "expired"
+    assert event.metadata == {"reason": "expires_at elapsed"}
+
+
+def test_recovery_does_not_expire_active_game(tmp_path):
+    repo = repository(tmp_path)
+    repo.create(
+        guild_id=1,
+        organizer_id=2,
+        capacity=5,
+        lobby_id="playing",
+        expires_at=datetime.now(timezone.utc) - timedelta(seconds=1),
+        operation_id="create",
+    )
+    repo.transition(1, "playing", LobbyState.FULL, operation_id="full")
+    repo.transition(1, "playing", LobbyState.READY_CHECK, operation_id="ready")
+    repo.transition(1, "playing", LobbyState.FORMING, operation_id="forming")
+    repo.transition(1, "playing", LobbyState.ACTIVE, operation_id="active")
+
+    recovered = repo.recover_active(1)
+
+    assert [record.lobby.lobby_id for record in recovered] == ["playing"]
 
 
 def test_full_lobby_rejects_additional_participant(tmp_path):

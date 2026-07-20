@@ -194,6 +194,16 @@ class SQLitePartyRepository:
             lobby = self._require(conn, guild_id, lobby_id)
             validate_transition(lobby.state, target)
             if lobby.state == target:
+                self._audit(
+                    conn,
+                    lobby,
+                    operation_id,
+                    fingerprint,
+                    "state_transition_noop",
+                    lobby.state,
+                    actor_id,
+                    {"reason": reason} if reason else {},
+                )
                 return lobby
             changed = lobby.transitioned(target, at=at)
             conn.execute(
@@ -276,6 +286,7 @@ class SQLitePartyRepository:
             return changed
 
     def recover_active(self, guild_id: int | None = None) -> list[RecoveryRecord]:
+        self._expire_due_recruitment(guild_id)
         placeholders = ",".join("?" for _ in ACTIVE_STATES)
         params: list[object] = [state.value for state in ACTIVE_STATES]
         query = f"SELECT lobby_id,guild_id FROM party_lobbies WHERE state IN ({placeholders})"
@@ -289,6 +300,60 @@ class SQLitePartyRepository:
                 RecoveryRecord(self._require(conn, row["guild_id"], row["lobby_id"]))
                 for row in rows
             ]
+
+    def _expire_due_recruitment(self, guild_id: int | None = None) -> None:
+        """Expire elapsed pre-active lobbies before returning recovery work."""
+        expirable = (
+            LobbyState.OPEN,
+            LobbyState.FULL,
+            LobbyState.READY_CHECK,
+        )
+        placeholders = ",".join("?" for _ in expirable)
+        params: list[object] = [state.value for state in expirable]
+        query = (
+            "SELECT lobby_id,guild_id,expires_at FROM party_lobbies "
+            f"WHERE state IN ({placeholders}) AND expires_at IS NOT NULL "
+            "AND expires_at<=?"
+        )
+        params.append(_encode_time(utc_now()))
+        if guild_id is not None:
+            query += " AND guild_id=?"
+            params.append(guild_id)
+
+        with self._transaction() as conn:
+            for row in conn.execute(query, params).fetchall():
+                lobby = self._require(conn, row["guild_id"], row["lobby_id"])
+                operation_id = (
+                    f"expiry:{lobby.guild_id}:{lobby.lobby_id}:{row['expires_at']}"
+                )
+                fingerprint = (
+                    f"transition:{lobby.guild_id}:{lobby.lobby_id}:"
+                    f"{LobbyState.EXPIRED}"
+                )
+                if self._operation(conn, operation_id, fingerprint):
+                    continue
+                changed = lobby.transitioned(LobbyState.EXPIRED)
+                conn.execute(
+                    "UPDATE party_lobbies SET state=?,updated_at=?,version=? "
+                    "WHERE lobby_id=? AND guild_id=?",
+                    (
+                        LobbyState.EXPIRED,
+                        _encode_time(changed.updated_at),
+                        changed.version,
+                        changed.lobby_id,
+                        changed.guild_id,
+                    ),
+                )
+                self._audit(
+                    conn,
+                    changed,
+                    operation_id,
+                    fingerprint,
+                    "expired",
+                    lobby.state,
+                    None,
+                    {"reason": "expires_at elapsed"},
+                )
 
     def audit_events(self, guild_id: int, lobby_id: str) -> list[AuditEvent]:
         with self._connect() as conn:
