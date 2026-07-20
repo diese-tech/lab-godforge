@@ -47,6 +47,7 @@ from utils.lobby_views import (
     CreateLobbyModal,
     JoinPreferencesModal,
     LobbyCardView,
+    MatchResultView,
     ReadyCheckView,
 )
 from utils.party_queue import (
@@ -57,6 +58,12 @@ from utils.party_queue import (
     SQLitePartyQueueRepository,
 )
 from utils.party_draft import PartyDraftError, PartyDraftLaunchRepository
+from utils.match_history import (
+    MatchHistoryRepository,
+    MatchOutcome,
+    MatchPlayer,
+    MatchTeam,
+)
 from utils import match_ids
 from utils import ledger as ledger_utils
 from utils import wallet as wallet_utils
@@ -101,6 +108,7 @@ class GodForgeClient(discord.Client):
         self.add_view(RolePreferencesView(_handle_role_preference))
         self.add_view(LobbyCardView(_handle_lobby_card_action))
         self.add_view(ReadyCheckView(_handle_ready_check_action))
+        self.add_view(MatchResultView(_handle_match_result_action))
         await self.tree.sync()
 
 
@@ -116,6 +124,7 @@ party_queue_service = PartyQueueService(
     )
 )
 party_draft_repository = PartyDraftLaunchRepository(_PARTY_DB_PATH)
+match_history_repository = MatchHistoryRepository(_PARTY_DB_PATH)
 forgelens_adapter = ForgeLensAdapter()
 
 # Track metadata for reaction-enabled messages (sessions only).
@@ -2559,6 +2568,7 @@ async def _launch_party_draft(
         return
     existing_launch = party_draft_repository.get(lobby.lobby_id)
     if existing_launch and existing_launch.status == "active":
+        _ensure_match_history(lobby, existing_launch)
         _reconcile_active_party_draft(lobby, existing_launch, interaction.user.id)
         await interaction.response.send_message(
             f"Draft `{existing_launch.match_id}` is already active.",
@@ -2654,6 +2664,7 @@ async def _launch_party_draft(
 
         launch = party_draft_repository.mark_active(lobby.lobby_id)
         draft_started = True
+        match_record = _ensure_match_history(lobby, launch)
         _reconcile_active_party_draft(lobby, launch, interaction.user.id)
         await channel.send(
             f"⚔️ Draft `{launch.match_id}` launched from lobby `{lobby.lobby_id[:8]}`.\n"
@@ -2662,6 +2673,10 @@ async def _launch_party_draft(
             + f"\n🔴 Captain <@{launch.red.captain_id}>: "
             + " ".join(f"<@{user_id}>" for user_id in launch.red.participant_ids),
             allowed_mentions=discord.AllowedMentions(users=True, roles=False),
+        )
+        await channel.send(
+            embed=_match_result_embed(match_record),
+            view=MatchResultView(_handle_match_result_action),
         )
         await interaction.followup.send(
             f"Draft `{launch.match_id}` started. Teams and lobby rules are retained.",
@@ -2684,6 +2699,127 @@ async def _launch_party_draft(
                 "`Launch Draft`. " + str(exc),
                 ephemeral=True,
             )
+
+
+def _ensure_match_history(lobby, launch):
+    """Idempotently create the authoritative record once a draft is active."""
+    roles = {
+        participant.user_id: participant.primary_role or ""
+        for participant in lobby.participants
+    }
+
+    def team(name, draft_team):
+        return MatchTeam(
+            name,
+            draft_team.captain_id,
+            tuple(
+                MatchPlayer(user_id, roles.get(user_id, ""))
+                for user_id in draft_team.participant_ids
+            ),
+        )
+
+    return match_history_repository.create(
+        guild_id=lobby.guild_id,
+        organizer_id=lobby.organizer_id,
+        team_one=team("Blue", launch.blue),
+        team_two=team("Red", launch.red),
+        operation_id=(
+            f"party-draft-history:{lobby.guild_id}:{lobby.lobby_id}:"
+            f"{launch.match_id}"
+        ),
+        draft_reference=launch.match_id,
+        match_id=launch.match_id,
+    )
+
+
+def _match_result_embed(record) -> discord.Embed:
+    labels = {
+        MatchOutcome.PENDING: "Waiting for both captains",
+        MatchOutcome.DISPUTED: "Reports conflict - organizer must resolve",
+        MatchOutcome.TEAM_ONE: f"{record.team_one.name} won",
+        MatchOutcome.TEAM_TWO: f"{record.team_two.name} won",
+        MatchOutcome.CANCELLED: "Cancelled",
+        MatchOutcome.NO_CONTEST: "No contest",
+    }
+    embed = discord.Embed(
+        title=f"Match Result - {record.match_id}",
+        description=labels[record.outcome],
+        color=0x2ECC71 if record.outcome in {
+            MatchOutcome.TEAM_ONE, MatchOutcome.TEAM_TWO
+        } else 0xF1C40F,
+    )
+    embed.add_field(
+        name=record.team_one.name,
+        value=f"Captain <@{record.team_one.captain_id}>",
+    )
+    embed.add_field(
+        name=record.team_two.name,
+        value=f"Captain <@{record.team_two.captain_id}>",
+    )
+    embed.set_footer(text=f"match_id={record.match_id}")
+    return embed
+
+
+def _match_id_from_interaction(interaction: discord.Interaction) -> str:
+    embeds = getattr(interaction.message, "embeds", ())
+    footer = embeds[0].footer.text if embeds and embeds[0].footer else ""
+    if not footer.startswith("match_id="):
+        raise ValueError("This result card is missing its stable identity.")
+    return footer.removeprefix("match_id=")
+
+
+async def _handle_match_result_action(
+    interaction: discord.Interaction,
+    action: str,
+) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    match_id = _match_id_from_interaction(interaction)
+    record = match_history_repository.get(guild_id, match_id)
+    if record is None:
+        await interaction.response.send_message("Match record not found.", ephemeral=True)
+        return
+    outcome = MatchOutcome(action)
+    operation_id = f"discord:{interaction.id}:match-result"
+    try:
+        if interaction.user.id == record.organizer_id:
+            changed = match_history_repository.resolve(
+                guild_id,
+                match_id,
+                organizer_id=interaction.user.id,
+                outcome=outcome,
+                operation_id=operation_id,
+            )
+        else:
+            if outcome not in {MatchOutcome.TEAM_ONE, MatchOutcome.TEAM_TWO}:
+                raise PermissionError(
+                    "Only the organizer can cancel or record no contest."
+                )
+            changed = match_history_repository.report_winner(
+                guild_id,
+                match_id,
+                captain_id=interaction.user.id,
+                winner=outcome,
+                operation_id=operation_id,
+            )
+    except (PermissionError, ValueError) as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+    await interaction.response.edit_message(
+        embed=_match_result_embed(changed),
+        view=(
+            None
+            if changed.outcome in {
+                MatchOutcome.TEAM_ONE,
+                MatchOutcome.TEAM_TWO,
+                MatchOutcome.CANCELLED,
+                MatchOutcome.NO_CONTEST,
+            }
+            else MatchResultView(_handle_match_result_action)
+        ),
+    )
 
 
 def _reconcile_active_party_draft(lobby, launch, actor_id: int) -> None:

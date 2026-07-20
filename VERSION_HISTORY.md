@@ -83,6 +83,9 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
   Activity-backed fearless draft from a ready lobby without re-entering
   captains, participants, roles, or rules; durable launch intents make retries
   safe and failures recoverable.
+- **Standalone results and history**: captain-confirmed winners, organizer
+  dispute resolution, explicit cancelled/no-contest records, and guild, team,
+  and player game-night statistics persist without a companion service.
 
 ## Future Version Gates
 

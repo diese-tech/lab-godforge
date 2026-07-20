@@ -12,6 +12,7 @@ from utils.lobby_views import (
     CreateLobbyModal,
     JoinPreferencesModal,
     LobbyCardView,
+    MatchResultView,
     ReadyCheckView,
 )
 
@@ -182,6 +183,19 @@ def test_ready_check_view_is_persistent_with_stable_actions():
         "Ready",
         "Need 5 Minutes",
         "Drop",
+    ]
+    assert all(item.row == 0 for item in view.children)
+
+
+def test_match_result_view_is_persistent_with_stable_actions():
+    view = MatchResultView(AsyncMock())
+
+    assert view.timeout is None
+    assert [item.custom_id for item in view.children] == [
+        "godforge:match:result:team_one:v1",
+        "godforge:match:result:team_two:v1",
+        "godforge:match:result:cancelled:v1",
+        "godforge:match:result:no_contest:v1",
     ]
     assert all(item.row == 0 for item in view.children)
 
