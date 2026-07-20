@@ -6,11 +6,15 @@ GodForge is the Smite 2 Discord match orchestration bot. It handles random god a
 
 It is built for Discord communities running Smite 2 draft nights or leagues where staff need one bot to coordinate picks, drafts, match IDs, and portable draft records.
 
-ForgeLens, the companion stats bot, owns OCR, results, stat tracking, betting, wallets, ledgers, and settlement. GodForge and ForgeLens can run in different Discord servers, so GodForge hands off a portable draft JSON artifact instead of depending on shared server state.
+GodForge is a standalone product. It does not require a companion bot for any
+core workflow. An optional, disabled-by-default ForgeLens adapter preserves the
+portable draft handoff for possible future statistics enrichment; economy and
+betting are outside GodForge's scope.
 
 ## Current Status
 
-GodForge is active and production-ish for Discord draft operations. Economy commands are deprecated in GodForge and should be handled by ForgeLens.
+GodForge is active and production-ish for Discord draft operations. Legacy
+economy commands are deprecated and unavailable in the standalone product.
 
 The project also contains a local/static web dashboard and Python web API bridge. That dashboard bridge is release-candidate/staging work: it exposes useful admin surfaces, temporary password auth, staged Discord OAuth, JSON-or-SQLite dashboard storage, and local API endpoints, but full guild permission enforcement and durable production dashboard storage are still evolving.
 
@@ -44,19 +48,20 @@ Important status notes:
 ### Fearless Drafts
 
 - `.draft start @blue @red` still works standalone.
-- Optional ForgeLens linkage: `.draft start @blue @red --match FL-123 --game 2`.
+- Optional ForgeLens linkage, when explicitly enabled:
+  `.draft start @blue @red --match FL-123 --game 2`.
 - `.ban`, `.pick`, `.draft show`, `.draft next`, `.draft undo`, `.draft end`.
 - Local fallback draft engine in `utils/draft.py`.
 - Optional Activity backend mode through HTTP/WebSocket when `ACTIVITY_BACKEND_URL` is set.
-- Draft embeds expose a public `ForgeLens Status` field with `draft_status`, `draft_id`, optional `forgelens_match_id`, `game_number`, and `draft_sequence`.
-- Draft exports are posted as JSON attachments at the end of a set and use the stable GodForge -> ForgeLens handoff contract.
+- Draft embeds expose ForgeLens status only when the optional adapter is enabled.
+- Draft exports are posted as portable JSON attachments at the end of a set.
 - When claims finish, GodForge posts a visible `Draft complete` marker in-channel for observers.
 - Completed game picks, not bans, populate the fearless pool.
 
 ### Deprecated Economy Commands
 
 - `.match`, `.bet`, `.wallet`, and `.ledger` are deprecated in GodForge and do not mutate Discord-side state.
-- ForgeLens owns betting, wallets, ledgers, results, OCR, stat tracking, and settlement.
+- Betting, wallets, ledgers, and settlement are outside GodForge's scope.
 - GodForge keeps match orchestration in `.draft start`, `.ban`, `.pick`, `.draft next`, `.draft undo`, and `.draft end`.
 
 ### Web Dashboard And API Bridge
@@ -101,7 +106,8 @@ Main data flow:
 3. Randomizer/build commands read JSON data and return embeds or text.
 4. Sessions and local drafts are held in memory by channel ID.
 5. Draft start reserves a portable `match_id` from `data/match_ids.json`.
-6. Draft end posts JSON for ForgeLens import.
+6. Draft end posts a portable JSON record; the optional adapter can map it for
+   ForgeLens when enabled.
 7. The optional web API reuses Python modules for dashboard/admin actions, including legacy migration surfaces.
 
 ## Commands / Usage
@@ -158,10 +164,10 @@ Without a count, build commands return 6 items. Counts outside 1-5 are ignored b
 
 | Command | Who | Result |
 | --- | --- | --- |
-| `.match ...` | Any | Deprecated; ForgeLens owns match results and economy workflows |
-| `.bet ...` | Any | Deprecated; ForgeLens owns player bets |
-| `.wallet ...` | Any | Deprecated; ForgeLens owns wallet balances |
-| `.ledger ...` | Any | Deprecated; ForgeLens owns ledgers |
+| `.match ...` | Any | Deprecated; standalone results are planned |
+| `.bet ...` | Any | Deprecated; betting is out of scope |
+| `.wallet ...` | Any | Deprecated; wallets are out of scope |
+| `.ledger ...` | Any | Deprecated; economy ledgers are out of scope |
 
 ### Utility
 
@@ -266,8 +272,10 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 | `DISCORD_TOKEN` | Bot yes | Discord bot token. |
 | `ACTIVITY_BACKEND_URL` | No | Enables Activity backend draft mode when set. Omit for local draft mode. |
 | `ACTIVITY_API_KEY` | Activity backend only | API key sent as `X-Api-Key` to the Activity backend. |
-| `BETTING_LEDGER_CHANNEL_ID` | Deprecated | Legacy betting ledger channel setting. ForgeLens owns ledgers. |
-| `PLACE_BETS_CHANNEL_ID` | Deprecated | Legacy bet placement channel setting. ForgeLens owns bets. |
+| `GODFORGE_PARTY_DB_PATH` | No | Standalone party-lifecycle SQLite path. Defaults to `data/godforge_party.db`. |
+| `GODFORGE_ENABLE_FORGELENS` | No | Enables optional companion export/status compatibility. Disabled by default. |
+| `BETTING_LEDGER_CHANNEL_ID` | Deprecated | Legacy betting ledger channel setting. |
+| `PLACE_BETS_CHANNEL_ID` | Deprecated | Legacy bet placement channel setting. |
 | `MATCH_DRAFT_CHANNEL_ID` | Deprecated | Legacy match draft setting. Draft orchestration uses `.draft` commands. |
 | `GODFORGE_ENABLE_LEGACY_ECONOMY` | Legacy only | Enables legacy web/API economy mutations. Leave unset in normal production. |
 | `HOST` | Web/API optional | Host binding for `web_api/server.py` or `railway_app.py`. Defaults differ between local API and Railway launcher. |
@@ -295,7 +303,7 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 
 - Move hard-coded guild/report routing into per-guild configuration.
 - Add or finish durable per-guild storage for settings, reports channels, and custom commands.
-- Remove or migrate remaining legacy ledger/wallet internals after ForgeLens owns the replacement flows.
+- Remove remaining legacy ledger/wallet internals after compatibility windows close.
 - Review match ID generation and channel/server scoping before running one bot across unrelated leagues.
 - Persist or recover full session state across restarts (draft orphan notifications are implemented; full state recovery is not).
 - Audit Activity backend mode for retry, reconnect, and failure behavior around WebSocket draft state.

@@ -128,6 +128,7 @@ def test_draft_complete_status_only_after_claims(tmp_path, monkeypatch):
 
 
 def test_draft_board_contains_forgelens_status_field(tmp_path, monkeypatch):
+    monkeypatch.setenv("GODFORGE_ENABLE_FORGELENS", "true")
     draft = _make_draft(tmp_path, monkeypatch, forgelens_match_id="FL-999", game_number=3)
 
     embed = formatter.format_draft_board(draft)
@@ -138,3 +139,12 @@ def test_draft_board_contains_forgelens_status_field(tmp_path, monkeypatch):
     assert "forgelens_match_id=FL-999" in status_field.value
     assert "game_number=3" in status_field.value
     assert "draft_sequence=1" in status_field.value
+
+
+def test_draft_board_hides_forgelens_status_by_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("GODFORGE_ENABLE_FORGELENS", raising=False)
+    draft = _make_draft(tmp_path, monkeypatch, forgelens_match_id="FL-999")
+
+    embed = formatter.format_draft_board(draft)
+
+    assert all(field.name != "ForgeLens Status" for field in embed.fields)

@@ -9,6 +9,8 @@ The bot.py handler checks the return type and sends accordingly.
 import re
 import discord
 
+from utils.forgelens_adapter import forgelens_enabled
+
 
 GODFORGE_VERSION = "2.2.0"
 RELEASE_NOTES = "Release notes: VERSION_HISTORY.md"
@@ -311,6 +313,8 @@ def _forgelens_status_value(draft_status: str, draft_id: str, forgelens_match_id
 def _add_forgelens_status_field(embed: discord.Embed, draft_status: str, draft_id: str,
                                 forgelens_match_id: str, game_number: int,
                                 draft_sequence: int) -> None:
+    if not forgelens_enabled():
+        return
     embed.add_field(
         name="ForgeLens Status",
         value=_forgelens_status_value(
