@@ -13,6 +13,7 @@ CREATE_MODAL_CUSTOM_ID = "godforge:lobby:create:v1"
 JOIN_MODAL_CUSTOM_ID = "godforge:lobby:join-preferences:v1"
 LOBBY_CARD_CUSTOM_ID_PREFIX = "godforge:lobby:card"
 READY_CHECK_CUSTOM_ID_PREFIX = "godforge:lobby:ready-check"
+MATCH_RESULT_CUSTOM_ID_PREFIX = "godforge:match:result"
 
 LOBBY_CARD_ACTIONS = (
     ("join", "Join", discord.ButtonStyle.success),
@@ -28,6 +29,13 @@ READY_CHECK_ACTIONS = (
     ("ready", "Ready", discord.ButtonStyle.success),
     ("need_five", "Need 5 Minutes", discord.ButtonStyle.secondary),
     ("drop", "Drop", discord.ButtonStyle.danger),
+)
+
+MATCH_RESULT_ACTIONS = (
+    ("team_one", "Blue Won", discord.ButtonStyle.primary),
+    ("team_two", "Red Won", discord.ButtonStyle.danger),
+    ("cancelled", "Cancel", discord.ButtonStyle.secondary),
+    ("no_contest", "No Contest", discord.ButtonStyle.secondary),
 )
 
 ModalHandler = Callable[[discord.Interaction, dict[str, object]], Awaitable[None]]
@@ -291,6 +299,24 @@ class ReadyCheckView(discord.ui.View):
                     style,
                     handler,
                     custom_id_prefix=READY_CHECK_CUSTOM_ID_PREFIX,
+                    row=0,
+                )
+            )
+
+
+class MatchResultView(discord.ui.View):
+    """Persistent captain confirmation and organizer resolution controls."""
+
+    def __init__(self, handler: LobbyActionHandler) -> None:
+        super().__init__(timeout=None)
+        for action, label, style in MATCH_RESULT_ACTIONS:
+            self.add_item(
+                _LobbyActionButton(
+                    action,
+                    label,
+                    style,
+                    handler,
+                    custom_id_prefix=MATCH_RESULT_CUSTOM_ID_PREFIX,
                     row=0,
                 )
             )

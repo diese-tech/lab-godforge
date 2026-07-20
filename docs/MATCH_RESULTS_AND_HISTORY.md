@@ -32,12 +32,17 @@ Cancelled, no-contest, pending, and disputed matches remain visible in history
 but do not count as played appearances or wins. Queries are guild scoped and
 capped at 500 records.
 
-## Discord integration contract
+## Discord integration
 
-Issue #24 should call `create` when teams are locked, then render captain result
-buttons. Button interaction IDs pass to `report_winner`; organizer resolution
-controls call `resolve`. Recent-match cards use `recent_for_guild`,
-`recent_for_team`, and `recent_for_player`.
+When a party draft becomes active, `bot._ensure_match_history` idempotently
+creates its authoritative match record from the durable `PartyDraftLaunch`
+teams and the lobby's assigned roles. GodForge posts a persistent result card:
+captains can report Blue or Red, while the organizer can resolve a result,
+cancel it, or mark no contest. The result card is registered again after bot
+restarts.
+
+Recent-match surfaces use `recent_for_guild`, `recent_for_team`, and
+`recent_for_player`.
 
 Any future analytics export must subscribe after the authoritative GodForge
 transaction and must never block result recording.

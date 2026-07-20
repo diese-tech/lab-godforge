@@ -5,6 +5,7 @@ import pytest
 from utils.party import LobbyState, Participant, PartyLobby
 from utils.party_draft import PartyDraftError, PartyDraftLaunchRepository, form_teams
 from utils.draft import DraftManager
+from utils.match_history import MatchHistoryRepository
 
 
 def _ready_lobby():
@@ -161,4 +162,36 @@ def test_local_draft_export_retains_party_context():
     assert draft.to_export_dict()["party"] == {
         "lobby_id": "lobby-1",
         "guild_id": 10,
+    }
+
+
+def test_active_launch_creates_authoritative_history_from_actual_contract(
+    tmp_path, monkeypatch
+):
+    import bot
+
+    lobby = _ready_lobby()
+    launch_repo = PartyDraftLaunchRepository(tmp_path / "party.db")
+    launch, _ = launch_repo.begin(
+        lobby,
+        operation_id="interaction-1",
+        channel_id=500,
+        match_id_factory=lambda: "GF-0042",
+    )
+    launch = launch_repo.mark_active(lobby.lobby_id)
+    history = MatchHistoryRepository(tmp_path / "party.db")
+    monkeypatch.setattr(bot, "match_history_repository", history)
+
+    first = bot._ensure_match_history(lobby, launch)
+    retry = bot._ensure_match_history(lobby, launch)
+
+    assert retry == first
+    assert first.match_id == first.draft_reference == "GF-0042"
+    assert first.organizer_id == 99
+    assert first.team_one.captain_id == launch.blue.captain_id
+    assert tuple(player.user_id for player in first.team_two.players) == (
+        launch.red.participant_ids
+    )
+    assert {player.role for player in first.participants} == {
+        "solo", "jungle", "mid", "support", "adc"
     }
