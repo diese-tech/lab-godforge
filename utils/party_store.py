@@ -272,6 +272,51 @@ class SQLitePartyRepository:
             )
             return changed
 
+    def transfer_organizer(
+        self,
+        guild_id: int,
+        lobby_id: str,
+        new_organizer_id: int,
+        *,
+        operation_id: str,
+        actor_id: int,
+    ) -> PartyLobby:
+        fingerprint = (
+            f"organizer:{guild_id}:{lobby_id}:{actor_id}:{new_organizer_id}"
+        )
+        with self._transaction() as conn:
+            if self._operation(conn, operation_id, fingerprint):
+                return self._require(conn, guild_id, lobby_id)
+            lobby = self._require(conn, guild_id, lobby_id)
+            if lobby.organizer_id != actor_id:
+                raise PermissionError("only the organizer can transfer ownership")
+            if lobby.participant(new_organizer_id) is None:
+                raise ValueError("new organizer must be a lobby participant")
+            if lobby.is_terminal:
+                raise ValueError("cannot transfer a terminal lobby")
+            conn.execute(
+                "UPDATE party_lobbies SET organizer_id=?,updated_at=?,version=version+1 "
+                "WHERE lobby_id=? AND guild_id=?",
+                (
+                    new_organizer_id,
+                    _encode_time(utc_now()),
+                    lobby_id,
+                    guild_id,
+                ),
+            )
+            changed = self._require(conn, guild_id, lobby_id)
+            self._audit(
+                conn,
+                changed,
+                operation_id,
+                fingerprint,
+                "organizer_transferred",
+                lobby.state,
+                actor_id,
+                {"new_organizer_id": new_organizer_id},
+            )
+            return changed
+
     def transition(
         self,
         guild_id: int,

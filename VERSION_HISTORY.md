@@ -86,6 +86,9 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
 - **Standalone results and history**: captain-confirmed winners, organizer
   dispute resolution, explicit cancelled/no-contest records, and guild, team,
   and player game-night statistics persist without a companion service.
+- **Temporary match rooms**: ready lobbies receive private coordination and
+  optional team voice rooms with organizer-scoped controls, explicit voice-move
+  failures, restart reconciliation, summary archival, and grace-period cleanup.
 
 ## Future Version Gates
 

@@ -65,6 +65,8 @@ from utils.match_history import (
     MatchTeam,
 )
 from utils import match_ids
+from utils.match_rooms import MatchRoomService, SQLiteMatchRoomRepository
+from utils.discord_match_rooms import DiscordMatchRoomOperations
 from utils import ledger as ledger_utils
 from utils import wallet as wallet_utils
 
@@ -125,6 +127,7 @@ party_queue_service = PartyQueueService(
 )
 party_draft_repository = PartyDraftLaunchRepository(_PARTY_DB_PATH)
 match_history_repository = MatchHistoryRepository(_PARTY_DB_PATH)
+match_room_repository = SQLiteMatchRoomRepository(_PARTY_DB_PATH)
 forgelens_adapter = ForgeLensAdapter()
 
 # Track metadata for reaction-enabled messages (sessions only).
@@ -343,6 +346,20 @@ async def on_ready():
     recoverable_lobbies = party_repository.recover_active()
     if recoverable_lobbies:
         log.info("Recovered %s active party lobby record(s)", len(recoverable_lobbies))
+    for guild in client.guilds:
+        guild_rooms = tuple(
+            rooms
+            for rooms in match_room_repository.active()
+            if rooms.guild_id == guild.id
+        )
+        if not guild_rooms:
+            continue
+        try:
+            room_service = _match_room_service_for_guild(guild)
+            for rooms in guild_rooms:
+                await room_service.reconcile(rooms.lobby_id)
+        except Exception:
+            log.exception("Temporary-room reconciliation failed for guild %s", guild.id)
 
     orphaned = _load_active_drafts()
     if orphaned:
@@ -377,6 +394,26 @@ async def cleanup_task():
     if expired_drafts:
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
 
+    for guild in client.guilds:
+        guild_rooms = tuple(
+            rooms
+            for rooms in match_room_repository.active()
+            if rooms.guild_id == guild.id
+        )
+        if not guild_rooms:
+            continue
+        try:
+            room_service = _match_room_service_for_guild(guild)
+            for rooms in guild_rooms:
+                lobby = party_repository.get(guild.id, rooms.lobby_id)
+                if lobby and lobby.is_terminal:
+                    await room_service.close(
+                        rooms.lobby_id, reason=f"lobby {lobby.state.value}"
+                    )
+            await room_service.cleanup_due()
+        except Exception:
+            log.exception("Temporary-room cleanup failed for guild %s", guild.id)
+
     for record in party_repository.recover_active():
         lobby = record.lobby
         if lobby.state is not LobbyState.READY_CHECK:
@@ -407,6 +444,29 @@ async def cleanup_task():
 async def cleanup_task_error(exc: Exception):
     log.error(f"cleanup_task crashed: {exc!r} — restarting")
     cleanup_task.restart()
+
+
+@client.event
+async def on_voice_state_update(member, before, after):
+    changed_ids = {
+        channel.id
+        for channel in (before.channel, after.channel)
+        if channel is not None
+    }
+    if not changed_ids:
+        return
+    for rooms in match_room_repository.active():
+        if not changed_ids.intersection(rooms.team_voice_ids):
+            continue
+        guild = member.guild
+        voice_channels = [
+            guild.get_channel(channel_id) for channel_id in rooms.team_voice_ids
+        ]
+        service = _match_room_service_for_guild(guild)
+        if any(getattr(channel, "members", ()) for channel in voice_channels):
+            await service.mark_occupied(rooms.lobby_id)
+        else:
+            await service.mark_empty(rooms.lobby_id)
 
 
 @client.event
@@ -1988,6 +2048,26 @@ party_commands = app_commands.Group(
 client.tree.add_command(party_commands)
 
 
+def _match_room_service_for_guild(guild: discord.Guild) -> MatchRoomService:
+    managed = settings.get_guild_settings(str(guild.id))["managed"]
+    category_id = int(managed.get("roomCategoryId") or 0)
+    archive_channel_id = int(managed.get("playChannelId") or 0)
+    if not category_id or not archive_channel_id:
+        raise RuntimeError("Run /party setup before creating temporary rooms.")
+    grace = timedelta(
+        minutes=1 if managed.get("testMode") else 10
+    )
+    return MatchRoomService(
+        match_room_repository,
+        DiscordMatchRoomOperations(
+            guild,
+            category_id=category_id,
+            archive_channel_id=archive_channel_id,
+        ),
+        empty_grace=grace,
+    )
+
+
 @party_commands.command(name="setup", description="Set up GodForge for this server")
 @app_commands.describe(
     test_mode="Use short-lived lobbies without recording match history",
@@ -2110,6 +2190,89 @@ async def party_setup(
     await interaction.followup.send(
         f"GodForge Play is ready. Created roles: {created_roles}. "
         f"Test mode: {'on' if test_mode else 'off'}.",
+        ephemeral=True,
+    )
+
+
+@party_commands.command(
+    name="room",
+    description="Use organizer controls for a ready lobby's temporary rooms",
+)
+@app_commands.describe(
+    lobby_id="Stable lobby ID shown on the lobby card",
+    action="lock, unlock, remove, transfer, move, or close",
+    member="Player used by remove, transfer, or move",
+    lobby_voice="Configured source voice room for move",
+    team="Destination team number for move",
+)
+async def party_room(
+    interaction: discord.Interaction,
+    lobby_id: str,
+    action: str,
+    member: discord.Member | None = None,
+    lobby_voice: discord.VoiceChannel | None = None,
+    team: int | None = None,
+):
+    if interaction.guild is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    service = _match_room_service_for_guild(interaction.guild)
+    actor_id = interaction.user.id
+    action = action.strip().lower()
+    try:
+        if action == "lock":
+            rooms = await service.lock(lobby_id, actor_id=actor_id)
+        elif action == "unlock":
+            rooms = await service.unlock(lobby_id, actor_id=actor_id)
+        elif action == "remove" and member is not None:
+            rooms = await service.remove_player(
+                lobby_id, actor_id=actor_id, user_id=member.id
+            )
+        elif action == "transfer" and member is not None:
+            rooms = await service.transfer(
+                lobby_id, actor_id=actor_id, new_organizer_id=member.id
+            )
+            party_repository.transfer_organizer(
+                interaction.guild.id,
+                lobby_id,
+                member.id,
+                operation_id=f"discord:{interaction.id}:room-transfer",
+                actor_id=actor_id,
+            )
+        elif (
+            action == "move"
+            and member is not None
+            and lobby_voice is not None
+            and team is not None
+        ):
+            failures = await service.move_players(
+                lobby_id,
+                actor_id=actor_id,
+                lobby_voice_id=lobby_voice.id,
+                team_assignments={member.id: team},
+            )
+            if failures:
+                await interaction.response.send_message(
+                    failures[member.id], ephemeral=True
+                )
+                return
+            rooms = await service.get(lobby_id)
+        elif action == "close":
+            rooms = await service.close(
+                lobby_id, actor_id=actor_id, reason="organizer closed rooms"
+            )
+        else:
+            await interaction.response.send_message(
+                "Use lock, unlock, remove, transfer, move, or close. "
+                "Player/team inputs are required for their matching actions.",
+                ephemeral=True,
+            )
+            return
+    except (LookupError, PermissionError, ValueError, RuntimeError) as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+    await interaction.response.send_message(
+        f"Room action `{action}` completed for `{rooms.lobby_id[:8]}`.",
         ephemeral=True,
     )
 
@@ -2914,16 +3077,47 @@ async def _handle_ready_check_action(
         for member in queue.active
     )
     if everyone_ready:
+        room_failure = None
         lobby = party_repository.get(guild_id, lobby_id)
         if lobby and lobby.state is LobbyState.READY_CHECK:
-            party_repository.transition(
+            lobby = party_repository.transition(
                 guild_id,
                 lobby_id,
                 LobbyState.FORMING,
                 operation_id=f"discord:{interaction.id}:forming",
             )
+        if lobby and interaction.guild:
+            try:
+                rooms = await _match_room_service_for_guild(
+                    interaction.guild
+                ).provision(
+                    guild_id=guild_id,
+                    lobby_id=lobby_id,
+                    organizer_id=lobby.organizer_id,
+                    participant_ids=tuple(
+                        participant.user_id for participant in lobby.participants
+                    ),
+                    create_team_voice=lobby.voice_required,
+                )
+                room_channel = interaction.guild.get_channel(rooms.text_room_id)
+                if isinstance(room_channel, discord.TextChannel):
+                    await room_channel.send(
+                        f"<@{lobby.organizer_id}> temporary coordination is ready. "
+                        f"Use `/party room` with lobby ID `{lobby_id}` to lock, "
+                        "unlock, remove, transfer, move, or close these rooms.",
+                        allowed_mentions=discord.AllowedMentions(
+                            users=True, roles=False
+                        ),
+                    )
+            except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
+                room_failure = str(exc)
         await interaction.response.edit_message(
-            content="Everyone is ready. GodForge is forming the match.",
+            content=(
+                "Everyone is ready. GodForge is forming the match."
+                if room_failure is None
+                else "Everyone is ready, but GodForge could not create temporary "
+                f"rooms: {room_failure}"
+            ),
             embed=_ready_check_embed(lobby_id, queue),
             view=None,
         )
