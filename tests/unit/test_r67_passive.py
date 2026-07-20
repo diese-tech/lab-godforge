@@ -36,28 +36,35 @@ def _all_responses():
     return out
 
 
+def _passive(svc, guild_id, text, *, channel_id=10, user_id=100, now=None):
+    """Convenience wrapper returning just the passive response text."""
+    return svc.process_passive(
+        guild_id, channel_id, user_id, text, now=now
+    ).response
+
+
 def test_no_reaction_when_disabled(tmp_path):
     svc = _service(tmp_path, FixedRandom(0.0))  # roll would pass if reached
-    assert svc.handle_passive_message(1, "67") is None
+    assert _passive(svc, 1, "67") is None
 
 
 def test_no_reaction_for_non_qualifying_text(tmp_path):
     svc = _service(tmp_path, FixedRandom(0.0))
     svc.enable_reactions(1)
-    assert svc.handle_passive_message(1, "hello world") is None
+    assert _passive(svc, 1, "hello world") is None
 
 
 def test_reaction_on_successful_roll(tmp_path):
     svc = _service(tmp_path, FixedRandom(0.0))  # 0.0 < 0.07 -> passes
     svc.enable_reactions(1)
-    reply = svc.handle_passive_message(1, "that's 67 right there")
+    reply = _passive(svc, 1, "that's 67 right there")
     assert reply in _all_responses()
 
 
 def test_failed_roll_returns_none_and_sets_no_cooldown(tmp_path):
     svc = _service(tmp_path, FixedRandom(0.5))  # 0.5 >= 0.07 -> fails
     svc.enable_reactions(1)
-    assert svc.handle_passive_message(1, "67") is None
+    assert _passive(svc, 1, "67") is None
     # No cooldown persisted, so a subsequent passing roll can trigger.
     assert svc.repository.get_guild_state(1).passive_cooldown_until is None
 
@@ -65,27 +72,27 @@ def test_failed_roll_returns_none_and_sets_no_cooldown(tmp_path):
 def test_success_starts_guild_cooldown_that_blocks_next(tmp_path):
     svc = _service(tmp_path, FixedRandom(0.0))
     svc.enable_reactions(1)
-    first = svc.handle_passive_message(1, "67")
+    first = _passive(svc, 1, "67")
     assert first is not None
     # Within cooldown window: no roll, no reaction.
-    assert svc.handle_passive_message(1, "67 again") is None
+    assert _passive(svc, 1, "67 again") is None
 
 
 def test_cooldown_expires_after_five_minutes(tmp_path):
     svc = _service(tmp_path, FixedRandom(0.0))
     svc.enable_reactions(1)
     start = utc_now()
-    assert svc.handle_passive_message(1, "67", now=start) is not None
+    assert _passive(svc, 1, "67", now=start) is not None
     # Just after the 5-minute window, another success is allowed.
     later = start + timedelta(minutes=5, seconds=1)
-    assert svc.handle_passive_message(1, "67", now=later) is not None
+    assert _passive(svc, 1, "67", now=later) is not None
 
 
 def test_command_and_passive_are_independent(tmp_path):
     # A passive cooldown must not block direct .r67 commands.
     svc = _service(tmp_path, FixedRandom(0.0))
     svc.enable_reactions(1)
-    assert svc.handle_passive_message(1, "67") is not None  # sets cooldown
+    assert _passive(svc, 1, "67") is not None  # sets cooldown
     assert svc.direct_response(1) in _all_responses()  # still works
 
 

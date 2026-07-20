@@ -377,6 +377,13 @@ async def on_ready():
     recoverable_lobbies = party_repository.recover_active()
     if recoverable_lobbies:
         log.info("Recovered %s active party lobby record(s)", len(recoverable_lobbies))
+
+    try:
+        removed_grants = await r67_service.recover_role_grants(client.get_guild)
+        if removed_grants:
+            log.info("Removed %s expired 67 Survivor role grant(s)", removed_grants)
+    except Exception:
+        log.exception("67 Survivor role-grant recovery failed")
     for guild in client.guilds:
         guild_rooms = tuple(
             match_room_repository.active(guild.id)
@@ -422,6 +429,13 @@ async def cleanup_task():
     expired_drafts = drafts.cleanup_expired()
     if expired_drafts:
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
+
+    try:
+        removed_grants = await r67_service.cleanup_expired_role_grants(client.get_guild)
+        if removed_grants:
+            log.info("Removed %s expired 67 Survivor role grant(s)", removed_grants)
+    except Exception:
+        log.exception("67 Survivor role-grant cleanup failed")
 
     for guild in client.guilds:
         guild_rooms = tuple(
@@ -1233,12 +1247,49 @@ async def _handle_r67_passive(message: discord.Message):
     if not guild_settings["features"].get("botEnabled", True):
         return
     try:
-        response = r67_service.handle_passive_message(message.guild.id, message.content)
+        outcome = r67_service.process_passive(
+            message.guild.id,
+            message.channel.id,
+            message.author.id,
+            message.content,
+        )
     except Exception:
         log.exception("r67 passive handler failed for guild %s", message.guild.id)
         return
-    if response:
-        await message.channel.send(response)
+
+    if outcome.survivor_winners:
+        await _run_r67_survivor_event(message, outcome.survivor_winners)
+    if outcome.response:
+        await message.channel.send(outcome.response)
+
+
+async def _run_r67_survivor_event(message: discord.Message, winners: list[int]):
+    """Grant the cosmetic 67 Survivor role and post the event announcement.
+
+    The event cooldown is already committed by ``process_passive``; role failures
+    never suppress the announcement (Gate 3). Removal is handled durably by the
+    periodic cleanup task and startup recovery.
+    """
+    try:
+        result = await r67_service.grant_survivor_roles(message.guild, winners)
+        marked = result.marked
+    except Exception:
+        log.exception("67 Survivor role grant failed for guild %s", message.guild.id)
+        marked = False
+    log.info(
+        "67 Survivor event fired in guild %s channel %s (marked=%s)",
+        message.guild.id,
+        message.channel.id,
+        marked,
+    )
+    announcement = r67_service.build_survivor_announcement(winners, marked)
+    try:
+        await message.channel.send(
+            announcement,
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
+        )
+    except (discord.Forbidden, discord.HTTPException):
+        log.info("Could not post 67 Survivor announcement in guild %s", message.guild.id)
 
 
 async def _handle_deprecated_economy_command(message: discord.Message, command: str):
