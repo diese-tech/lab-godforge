@@ -50,8 +50,25 @@ Each feature owns, under its own package:
 - **Feature-to-feature via interfaces.** Direct feature-to-feature internal
   imports are disallowed; depend on shared infrastructure or a defined interface.
 - **Feature-owned lifecycle.** Startup recovery and background cleanup live in the
-  feature's service and are *registered* through the shared `on_ready` / cleanup
-  task — the orchestration is shared, the behavior is feature-owned.
+  feature's service and are *registered* through the shared lifecycle registry —
+  the orchestration is shared, the behavior is feature-owned.
+
+## Shared lifecycle infrastructure
+
+`utils/lifecycle.py` provides the shared half of the pattern:
+
+- `FeatureModule` — a `Protocol` with optional `async on_startup(ctx)` and
+  `async on_cleanup(ctx)` hooks.
+- `LifecycleContext` — carries the shared services a feature needs (currently a
+  `get_guild` lookup) so features never reach into `bot.py` globals.
+- `FeatureRegistry` — holds registered features and runs their hooks in order,
+  isolating and logging any single feature's failure.
+
+`bot.py` builds one `FeatureRegistry`, registers each feature's module (e.g.
+`R67Feature`), calls `run_startup(ctx)` from `on_ready`, and `run_cleanup(ctx)`
+from the 5-minute cleanup task. A feature's lifecycle adapter (`utils/r67/
+feature.py`) is the seam that maps these shared hooks onto its service methods —
+so `bot.py` never imports feature internals to schedule recovery or cleanup.
 
 ## Adding a new feature
 

@@ -73,6 +73,8 @@ from utils.scrims import (
     ScrimRepository,
     launch_scrim,
 )
+from utils.lifecycle import FeatureRegistry, LifecycleContext
+from utils.r67.feature import R67Feature
 from utils.r67.repository import SQLiteR67Repository
 from utils.r67.service import R67Service, build_survivor_announcement
 from utils.match_history import (
@@ -160,6 +162,15 @@ scrim_repository = ScrimRepository(_PARTY_DB_PATH)
 r67_repository = SQLiteR67Repository(_PARTY_DB_PATH)
 r67_service = R67Service(r67_repository)
 forgelens_adapter = ForgeLensAdapter()
+
+# Shared feature lifecycle registry (Issue #48). Features own their recovery and
+# cleanup and register it here; bot.py only orchestrates the shared phases.
+feature_registry = FeatureRegistry()
+feature_registry.register(R67Feature(r67_service))
+
+
+def _lifecycle_context() -> LifecycleContext:
+    return LifecycleContext(get_guild=client.get_guild)
 
 # Track metadata for reaction-enabled messages (sessions only).
 _tracked_messages = {}
@@ -378,12 +389,7 @@ async def on_ready():
     if recoverable_lobbies:
         log.info("Recovered %s active party lobby record(s)", len(recoverable_lobbies))
 
-    try:
-        removed_grants = await r67_service.recover_role_grants(client.get_guild)
-        if removed_grants:
-            log.info("Removed %s expired 67 Survivor role grant(s)", removed_grants)
-    except Exception:
-        log.exception("67 Survivor role-grant recovery failed")
+    await feature_registry.run_startup(_lifecycle_context())
     for guild in client.guilds:
         guild_rooms = tuple(
             match_room_repository.active(guild.id)
@@ -430,12 +436,7 @@ async def cleanup_task():
     if expired_drafts:
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
 
-    try:
-        removed_grants = await r67_service.cleanup_expired_role_grants(client.get_guild)
-        if removed_grants:
-            log.info("Removed %s expired 67 Survivor role grant(s)", removed_grants)
-    except Exception:
-        log.exception("67 Survivor role-grant cleanup failed")
+    await feature_registry.run_cleanup(_lifecycle_context())
 
     for guild in client.guilds:
         guild_rooms = tuple(
