@@ -75,6 +75,7 @@ from utils.scrims import (
 )
 from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
+from utils.draft_render import DraftRenderer
 from utils.session_commands import SessionCommandHandler
 from utils.lifecycle import FeatureRegistry, LifecycleContext
 from utils.routing import CommandRegistry
@@ -968,71 +969,24 @@ async def _handle_draft_action_activity(intent: dict, message: discord.Message):
 
 # ── Local draft helpers (used when ACTIVITY_BACKEND_URL is not set) ───────────
 
+# Draft board / claim-embed rendering is owned by DraftRenderer (Issue #48).
+draft_renderer = DraftRenderer(
+    formatter=formatter,
+    tracked_messages=_tracked_messages,
+    number_emojis=NUMBER_EMOJIS,
+)
+
+
 async def _update_draft_board(draft, channel):
-    """Edit the living draft board embed in place; fallback to posting new."""
-    if draft.board_message_id:
-        try:
-            msg = await channel.fetch_message(draft.board_message_id)
-            await msg.edit(embed=formatter.format_draft_board(draft))
-            return
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-            pass
-    sent = await channel.send(embed=formatter.format_draft_board(draft))
-    draft.board_message_id = sent.id
+    await draft_renderer.update_board(draft, channel)
 
 
 async def _post_claim_embeds(draft, channel):
-    """Post numbered claim embeds for both teams after a game completes."""
-    game = draft.current_game
-    for team in ("blue", "red"):
-        embed = formatter.format_claim_embed(
-            team,
-            game.picks[team],
-            game.claims[team],
-            draft.draft_id,
-            getattr(draft, "forgelens_match_id", ""),
-            game.game_number,
-            getattr(draft, "draft_sequence", 1),
-        )
-        sent = await channel.send(embed=embed)
-        draft.claim_message_ids[team] = sent.id
-        _tracked_messages[sent.id] = {
-            "kind": "claim",
-            "team": team,
-            "picks": game.picks[team],
-            "channel_id": channel.id,
-            "draft_id": draft.draft_id,
-        }
-        for emoji in NUMBER_EMOJIS:
-            await sent.add_reaction(emoji)
-    log.info(f"Draft {draft.draft_id}: claim embeds posted for Game {game.game_number}")
+    await draft_renderer.post_claim_embeds(draft, channel)
 
 
 async def _update_claim_embed(draft, team, channel):
-    """Edit a claim embed after a player claims or unclaims."""
-    msg_id = draft.claim_message_ids.get(team)
-    if not msg_id:
-        return
-    try:
-        msg = await channel.fetch_message(msg_id)
-        game = draft.current_game
-        embed = formatter.format_claim_embed(
-            team,
-            game.picks[team],
-            game.claims[team],
-            draft.draft_id,
-            getattr(draft, "forgelens_match_id", ""),
-            game.game_number,
-            getattr(draft, "draft_sequence", 1),
-        )
-        await msg.edit(embed=embed)
-        if all(god in game.claims[team] for god in game.picks[team]):
-            try:
-                await msg.clear_reactions()
-            except discord.Forbidden:
-                pass
-    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-        pass
+    await draft_renderer.update_claim_embed(draft, team, channel)
 
 
 
