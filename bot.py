@@ -34,7 +34,7 @@ from utils.session import SessionManager
 from utils.draft import DraftManager
 from utils.forgelens_adapter import ForgeLensAdapter, forgelens_enabled
 from utils.party_store import SQLitePartyRepository
-from utils.party import LobbyState, Participant
+from utils.party import LobbyState, Participant, PlayerPreferences
 from utils.guild_setup import (
     GuildSetupService,
     PermissionSnapshot,
@@ -43,6 +43,7 @@ from utils.guild_setup import (
 )
 from utils.managed_roles import ManagedRoleError, reconcile as reconcile_roles, set_member_role
 from utils.setup_views import PlayPanelView, RolePreferencesView
+from utils.lobby_views import CreateLobbyModal, JoinPreferencesModal, LobbyCardView
 from utils import ledger as ledger_utils
 from utils import wallet as wallet_utils
 
@@ -84,6 +85,7 @@ class GodForgeClient(discord.Client):
     async def setup_hook(self):
         self.add_view(PlayPanelView(_handle_play_panel_action))
         self.add_view(RolePreferencesView(_handle_role_preference))
+        self.add_view(LobbyCardView(_handle_lobby_card_action))
         await self.tree.sync()
 
 
@@ -2071,7 +2073,7 @@ async def _handle_play_panel_action(
             guild_id,
             interaction.user.id,
         )
-        selected = ", ".join(preferences) or "none yet"
+        selected = ", ".join(preferences.roles) or "none yet"
         await interaction.response.send_message(
             f"Your role preferences: **{selected}**. Toggle them below.",
             view=RolePreferencesView(_handle_role_preference),
@@ -2084,38 +2086,22 @@ async def _handle_play_panel_action(
         if record.lobby.state in {LobbyState.OPEN, LobbyState.FULL}
     ]
     if action == "browse":
-        description = "\n".join(
-            f"`{lobby.lobby_id[:8]}` — {len(lobby.participants)}/{lobby.capacity} "
-            f"({lobby.state.value})"
-            for lobby in active
-        ) or "No party lobbies are open yet."
-        await interaction.response.send_message(description, ephemeral=True)
+        if not active:
+            await interaction.response.send_message(
+                "No party lobbies are open yet.",
+                ephemeral=True,
+            )
+            return
+        lobby = active[0]
+        await interaction.response.send_message(
+            embed=_lobby_card_embed(lobby),
+            view=LobbyCardView(_handle_lobby_card_action),
+            ephemeral=True,
+        )
         return
     if action == "create":
-        guild_settings = settings.get_guild_settings(str(guild_id))
-        test_mode = guild_settings["managed"].get("testMode", False)
-        lobby = party_repository.create(
-            guild_id=guild_id,
-            organizer_id=interaction.user.id,
-            capacity=2 if test_mode else 10,
-            expires_at=datetime.now(timezone.utc)
-            + timedelta(minutes=10 if test_mode else 120),
-            operation_id=f"discord:{interaction.id}:create",
-        )
-        preferences = party_repository.get_player_preferences(
-            guild_id,
-            interaction.user.id,
-        )
-        lobby = party_repository.save_participant(
-            guild_id,
-            lobby.lobby_id,
-            Participant(interaction.user.id, preferences),
-            operation_id=f"discord:{interaction.id}:organizer",
-        )
-        await interaction.response.send_message(
-            f"Lobby `{lobby.lobby_id[:8]}` created "
-            f"({len(lobby.participants)}/{lobby.capacity}).",
-            ephemeral=True,
+        await interaction.response.send_modal(
+            CreateLobbyModal(_handle_create_lobby_submission)
         )
         return
     if action == "queue":
@@ -2134,20 +2120,216 @@ async def _handle_play_panel_action(
                 ephemeral=True,
             )
             return
-        preferences = party_repository.get_player_preferences(
-            guild_id,
+        async def join_handler(join_interaction, payload):
+            await _join_lobby_from_preferences(
+                join_interaction,
+                lobby.lobby_id,
+                payload,
+            )
+
+        await interaction.response.send_modal(
+            JoinPreferencesModal(join_handler)
+        )
+
+
+async def _handle_create_lobby_submission(
+    interaction: discord.Interaction,
+    payload: dict[str, object],
+) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    test_mode = settings.get_guild_settings(str(guild_id))["managed"].get(
+        "testMode",
+        False,
+    )
+    lobby = party_repository.create(
+        guild_id=guild_id,
+        organizer_id=interaction.user.id,
+        capacity=int(payload["party_size"]),
+        expires_at=datetime.now(timezone.utc)
+        + timedelta(minutes=10 if test_mode else 120),
+        operation_id=f"discord:{interaction.id}:create",
+        mode=str(payload["mode"]),
+        region=str(payload["region"]),
+        format=str(payload["format"]),
+        voice_required=bool(payload["voice_required"]),
+        skill_band=str(payload.get("skill_band") or ""),
+        notes=str(payload.get("notes") or ""),
+    )
+    profile = party_repository.get_player_preferences(guild_id, interaction.user.id)
+    lobby = party_repository.save_participant(
+        guild_id,
+        lobby.lobby_id,
+        Participant(
             interaction.user.id,
-        )
-        changed = party_repository.save_participant(
+            primary_role=profile.primary_role,
+            secondary_role=profile.secondary_role,
+            fill=profile.fill,
+            captain=profile.captain,
+        ),
+        operation_id=f"discord:{interaction.id}:organizer",
+    )
+    await interaction.response.send_message(
+        embed=_lobby_card_embed(lobby),
+        view=LobbyCardView(_handle_lobby_card_action),
+        ephemeral=True,
+    )
+
+
+async def _join_lobby_from_preferences(
+    interaction: discord.Interaction,
+    lobby_id: str,
+    payload: dict[str, object],
+) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    profile = PlayerPreferences(
+        str(payload["primary_role"]),
+        str(payload.get("secondary_role") or "") or None,
+        bool(payload["fill"]),
+        bool(payload["captain"]),
+    )
+    party_repository.set_player_preferences(
+        guild_id,
+        interaction.user.id,
+        profile,
+    )
+    changed = party_repository.save_participant(
+        guild_id,
+        lobby_id,
+        Participant(
+            interaction.user.id,
+            primary_role=profile.primary_role,
+            secondary_role=profile.secondary_role,
+            fill=profile.fill,
+            captain=profile.captain,
+        ),
+        operation_id=f"discord:{interaction.id}:join",
+    )
+    await interaction.response.send_message(
+        embed=_lobby_card_embed(changed),
+        view=LobbyCardView(_handle_lobby_card_action),
+        ephemeral=True,
+    )
+
+
+def _lobby_card_embed(lobby) -> discord.Embed:
+    participants = ", ".join(f"<@{p.user_id}>" for p in lobby.participants) or "None"
+    embed = discord.Embed(
+        title=f"{lobby.mode.title()} · {lobby.region.upper() or 'Any region'}",
+        description=lobby.notes or "Reusable GodForge party lobby",
+        color=0x3498DB,
+    )
+    embed.add_field(name="Organizer", value=f"<@{lobby.organizer_id}>")
+    embed.add_field(name="Format", value=lobby.format)
+    embed.add_field(
+        name="Roster",
+        value=f"{len(lobby.participants)}/{lobby.capacity} · {participants}",
+        inline=False,
+    )
+    embed.add_field(
+        name="Rules",
+        value=(
+            f"Voice: {'required' if lobby.voice_required else 'optional'} · "
+            f"Skill: {lobby.skill_band or 'open'}"
+        ),
+        inline=False,
+    )
+    embed.set_footer(text=f"lobby_id={lobby.lobby_id}")
+    return embed
+
+
+def _lobby_id_from_interaction(interaction: discord.Interaction) -> str:
+    embeds = getattr(interaction.message, "embeds", ())
+    footer = embeds[0].footer.text if embeds and embeds[0].footer else ""
+    if not footer.startswith("lobby_id="):
+        raise ValueError("This lobby card is missing its stable identity.")
+    return footer.removeprefix("lobby_id=")
+
+
+async def _handle_lobby_card_action(
+    interaction: discord.Interaction,
+    action: str,
+) -> None:
+    guild_id = interaction.guild_id
+    if guild_id is None:
+        await interaction.response.send_message("Server-only action.", ephemeral=True)
+        return
+    lobby_id = _lobby_id_from_interaction(interaction)
+    lobby = party_repository.get(guild_id, lobby_id)
+    if lobby is None:
+        await interaction.response.send_message("That lobby no longer exists.", ephemeral=True)
+        return
+    if action == "join":
+        async def join_handler(join_interaction, payload):
+            await _join_lobby_from_preferences(join_interaction, lobby_id, payload)
+
+        await interaction.response.send_modal(JoinPreferencesModal(join_handler))
+        return
+    if action == "leave":
+        changed = party_repository.remove_participant(
             guild_id,
-            lobby.lobby_id,
-            Participant(interaction.user.id, preferences),
-            operation_id=f"discord:{interaction.id}:queue",
+            lobby_id,
+            interaction.user.id,
+            operation_id=f"discord:{interaction.id}:leave",
+            actor_id=interaction.user.id,
         )
+        await interaction.response.edit_message(
+            embed=_lobby_card_embed(changed),
+            view=LobbyCardView(_handle_lobby_card_action),
+        )
+        return
+    if action in {"edit", "cancel"} and interaction.user.id != lobby.organizer_id:
         await interaction.response.send_message(
-            f"Joined `{changed.lobby_id[:8]}` "
-            f"({len(changed.participants)}/{changed.capacity}).",
+            "Only the organizer can change or cancel this lobby.",
             ephemeral=True,
+        )
+        return
+    if action == "cancel":
+        changed = party_repository.transition(
+            guild_id,
+            lobby_id,
+            LobbyState.CANCELLED,
+            operation_id=f"discord:{interaction.id}:cancel",
+            actor_id=interaction.user.id,
+        )
+        await interaction.response.edit_message(
+            embed=_lobby_card_embed(changed),
+            view=None,
+        )
+        return
+    if action == "edit":
+        async def edit_handler(edit_interaction, payload):
+            changed = party_repository.update_metadata(
+                guild_id,
+                lobby_id,
+                operation_id=f"discord:{edit_interaction.id}:edit",
+                actor_id=edit_interaction.user.id,
+                mode=str(payload["mode"]),
+                region=str(payload["region"]),
+                format=str(payload["format"]),
+                capacity=int(payload["party_size"]),
+                voice_required=bool(payload["voice_required"]),
+                skill_band=str(payload.get("skill_band") or ""),
+                notes=str(payload.get("notes") or ""),
+            )
+            await edit_interaction.response.send_message(
+                embed=_lobby_card_embed(changed),
+                view=LobbyCardView(_handle_lobby_card_action),
+                ephemeral=True,
+            )
+
+        await interaction.response.send_modal(CreateLobbyModal(edit_handler))
+        return
+    if action == "share":
+        await interaction.response.send_message("Lobby shared.", ephemeral=True)
+        await interaction.channel.send(
+            embed=_lobby_card_embed(lobby),
+            view=LobbyCardView(_handle_lobby_card_action),
         )
 
 
@@ -2170,21 +2352,26 @@ async def _handle_role_preference(
         enabled,
         stored_role_ids,
     )
-    preferences = set(
-        party_repository.get_player_preferences(guild_id, interaction.user.id)
-    )
-    if enabled:
-        preferences.add(role_key)
-    else:
-        preferences.discard(role_key)
+    profile = party_repository.get_player_preferences(guild_id, interaction.user.id)
+    roles = list(profile.roles)
+    if role_key in {"solo", "jungle", "mid", "support", "adc"}:
+        if enabled and role_key not in roles:
+            roles.append(role_key)
+        if not enabled and role_key in roles:
+            roles.remove(role_key)
     saved = party_repository.set_player_preferences(
         guild_id,
         interaction.user.id,
-        sorted(preferences),
+        PlayerPreferences(
+            roles[0] if roles else None,
+            roles[1] if len(roles) > 1 else None,
+            profile.fill,
+            enabled if role_key == "captain" else profile.captain,
+        ),
     )
     await interaction.response.send_message(
         f"{role_key.title()} {'added' if enabled else 'removed'}. "
-        f"Preferences: {', '.join(saved) or 'none'}.",
+        f"Preferences: {', '.join(saved.roles) or 'none'}.",
         ephemeral=True,
     )
 

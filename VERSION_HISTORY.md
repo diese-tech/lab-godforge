@@ -73,6 +73,9 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
 - **Managed role cosmetics**: permissionless role cosmetics and restart-safe
   self-assignment buttons project durable GodForge player preferences onto
   Discord roles without adopting same-named administrator roles.
+- **Reusable lobby cards**: Discord modals capture lobby rules and structured
+  role preferences; persistent cards support joining, leaving, organizer edits,
+  cancellation, and sharing while retaining state across restarts.
 
 ## Future Version Gates
 
