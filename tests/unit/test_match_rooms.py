@@ -17,11 +17,15 @@ class FakeRooms:
         self.archives = []
         self.moved = []
         self.fail_moves = set()
+        self.fail_create = False
+        self.fail_transfer = False
 
     async def resource_exists(self, resource_id):
         return resource_id in self.resources
 
     async def create_private_rooms(self, lobby_id, organizer_id, participant_ids, *, create_team_voice):
+        if self.fail_create:
+            raise RuntimeError("Discord creation failed")
         self.created += 1
         base = self.created * 100
         ids = (
@@ -43,6 +47,8 @@ class FakeRooms:
         return None
 
     async def transfer_organizer(self, resource_ids, old_organizer_id, new_organizer_id):
+        if self.fail_transfer:
+            raise RuntimeError("Discord transfer failed")
         return None
 
     async def move_from_lobby_voice(self, user_id, lobby_voice_id, destination_id):
@@ -104,6 +110,30 @@ async def test_missing_resources_are_recreated_without_duplication(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_failed_replacement_preserves_surviving_resources_and_stored_ids(tmp_path):
+    ops = FakeRooms()
+    service = MatchRoomService(
+        SQLiteMatchRoomRepository(tmp_path / "party.db"), ops
+    )
+    original = await service.provision(
+        guild_id=1,
+        lobby_id="lobby",
+        organizer_id=10,
+        participant_ids=(10, 11),
+        create_team_voice=True,
+    )
+    ops.resources.pop(original.team_voice_ids[-1])
+    surviving = set(original.resource_ids).intersection(ops.resources)
+    ops.fail_create = True
+
+    with pytest.raises(RuntimeError, match="creation failed"):
+        await service.reconcile("lobby")
+
+    assert surviving <= set(ops.resources)
+    assert await service.get("lobby") == original
+
+
+@pytest.mark.asyncio
 async def test_organizer_controls_are_lobby_scoped(tmp_path):
     service = MatchRoomService(
         SQLiteMatchRoomRepository(tmp_path / "party.db"), FakeRooms()
@@ -127,6 +157,64 @@ async def test_organizer_controls_are_lobby_scoped(tmp_path):
     assert unlocked.state is RoomState.OPEN
     assert transferred.organizer_id == 11
     assert removed.participant_ids == (10, 11)
+
+
+@pytest.mark.asyncio
+async def test_transactional_transfer_does_not_split_authority_on_party_failure(tmp_path):
+    ops = FakeRooms()
+    service = MatchRoomService(
+        SQLiteMatchRoomRepository(tmp_path / "party.db"), ops
+    )
+    await service.provision(
+        guild_id=1,
+        lobby_id="lobby",
+        organizer_id=10,
+        participant_ids=(10, 11),
+        create_team_voice=True,
+    )
+
+    def fail_party_transfer():
+        raise RuntimeError("party transfer failed")
+
+    with pytest.raises(RuntimeError, match="party transfer failed"):
+        await service.transfer_transactionally(
+            "lobby",
+            actor_id=10,
+            new_organizer_id=11,
+            commit=fail_party_transfer,
+            compensate=lambda: None,
+        )
+
+    assert (await service.get("lobby")).organizer_id == 10
+
+
+@pytest.mark.asyncio
+async def test_transactional_transfer_compensates_party_when_discord_fails(tmp_path):
+    ops = FakeRooms()
+    service = MatchRoomService(
+        SQLiteMatchRoomRepository(tmp_path / "party.db"), ops
+    )
+    await service.provision(
+        guild_id=1,
+        lobby_id="lobby",
+        organizer_id=10,
+        participant_ids=(10, 11),
+        create_team_voice=True,
+    )
+    operations = []
+    ops.fail_transfer = True
+
+    with pytest.raises(RuntimeError, match="Discord transfer failed"):
+        await service.transfer_transactionally(
+            "lobby",
+            actor_id=10,
+            new_organizer_id=11,
+            commit=lambda: operations.append("commit"),
+            compensate=lambda: operations.append("compensate"),
+        )
+
+    assert operations == ["commit", "compensate"]
+    assert (await service.get("lobby")).organizer_id == 10
 
 
 @pytest.mark.asyncio
@@ -177,3 +265,28 @@ async def test_cleanup_archives_summary_before_deleting_after_grace(tmp_path):
     assert ops.archives[0]["lobby_id"] == "lobby"
     assert all(resource_id not in ops.resources for resource_id in room.resource_ids)
     assert (await service.get("lobby")).state is RoomState.CLOSED
+
+
+@pytest.mark.asyncio
+async def test_repeated_empty_events_preserve_original_grace_deadline(tmp_path):
+    now = datetime(2026, 7, 20, tzinfo=UTC)
+    service = MatchRoomService(
+        SQLiteMatchRoomRepository(tmp_path / "party.db"),
+        FakeRooms(),
+        empty_grace=timedelta(minutes=5),
+    )
+    await service.provision(
+        guild_id=1,
+        lobby_id="lobby",
+        organizer_id=10,
+        participant_ids=(10, 11),
+        create_team_voice=True,
+    )
+
+    first = await service.mark_empty("lobby", at=now)
+    repeated = await service.mark_empty(
+        "lobby", at=now + timedelta(minutes=4)
+    )
+
+    assert repeated.empty_since == first.empty_since == now
+    assert await service.cleanup_due(now=now + timedelta(minutes=5)) == ("lobby",)

@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 
 class RoomState(StrEnum):
@@ -230,17 +230,19 @@ class MatchRoomService:
             if rooms.state is RoomState.ORPHANED:
                 return self.repository.save(replace(rooms, state=RoomState.OPEN))
             return rooms
-        # Delete any surviving partial set first so reconciliation never leaves
-        # two valid room groups for the same stable lobby identity.
-        if rooms.resource_ids:
-            await self.operations.delete_resources(rooms.resource_ids)
-        return await self._create(
+        # Replacement is created and persisted before the old partial set is
+        # removed. A Discord create failure therefore leaves every surviving
+        # room and its stored IDs available for the next reconciliation.
+        replacement = await self._create(
             rooms.guild_id,
             rooms.lobby_id,
             rooms.organizer_id,
             rooms.participant_ids,
             bool(rooms.team_voice_ids),
         )
+        if rooms.resource_ids:
+            await self.operations.delete_resources(rooms.resource_ids)
+        return replacement
 
     async def reconcile_all(self) -> tuple[MatchRooms, ...]:
         reconciled = []
@@ -294,6 +296,36 @@ class MatchRoomService:
             replace(rooms, organizer_id=new_organizer_id)
         )
 
+    async def transfer_transactionally(
+        self,
+        lobby_id: str,
+        *,
+        actor_id: int,
+        new_organizer_id: int,
+        commit: Callable[[], object],
+        compensate: Callable[[], object],
+    ) -> MatchRooms:
+        """Coordinate room ownership with the authoritative party repository.
+
+        The authoritative commit happens before Discord mutation. If Discord
+        rejects the handoff, the supplied compensation restores party
+        ownership while the room record remains unchanged.
+        """
+        rooms = self._authorized(lobby_id, actor_id)
+        if new_organizer_id not in rooms.participant_ids:
+            raise ValueError("new organizer must be a lobby participant")
+        commit()
+        try:
+            await self.operations.transfer_organizer(
+                rooms.resource_ids, rooms.organizer_id, new_organizer_id
+            )
+            return self.repository.save(
+                replace(rooms, organizer_id=new_organizer_id)
+            )
+        except Exception:
+            compensate()
+            raise
+
     async def move_players(
         self,
         lobby_id: str,
@@ -322,6 +354,8 @@ class MatchRoomService:
         self, lobby_id: str, *, at: datetime | None = None
     ) -> MatchRooms:
         rooms = self._required(lobby_id)
+        if rooms.state is RoomState.CLOSING and rooms.empty_since is not None:
+            return rooms
         return self.repository.save(
             replace(rooms, state=RoomState.CLOSING, empty_since=_utc(at))
         )

@@ -2229,15 +2229,26 @@ async def party_room(
                 lobby_id, actor_id=actor_id, user_id=member.id
             )
         elif action == "transfer" and member is not None:
-            rooms = await service.transfer(
-                lobby_id, actor_id=actor_id, new_organizer_id=member.id
-            )
-            party_repository.transfer_organizer(
-                interaction.guild.id,
+            rooms = await service.transfer_transactionally(
                 lobby_id,
-                member.id,
-                operation_id=f"discord:{interaction.id}:room-transfer",
                 actor_id=actor_id,
+                new_organizer_id=member.id,
+                commit=lambda: party_repository.transfer_organizer(
+                    interaction.guild.id,
+                    lobby_id,
+                    member.id,
+                    operation_id=f"discord:{interaction.id}:room-transfer",
+                    actor_id=actor_id,
+                ),
+                compensate=lambda: party_repository.transfer_organizer(
+                    interaction.guild.id,
+                    lobby_id,
+                    actor_id,
+                    operation_id=(
+                        f"discord:{interaction.id}:room-transfer-compensation"
+                    ),
+                    actor_id=member.id,
+                ),
             )
         elif (
             action == "move"
