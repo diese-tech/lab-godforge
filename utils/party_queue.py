@@ -247,6 +247,22 @@ class PartyQueueService:
     async def get(self, lobby_id: str) -> PartyQueue | None:
         return await self._repository.load(lobby_id)
 
+    async def resize(self, lobby_id: str, capacity: int) -> tuple[PartyQueue, tuple[int, ...]]:
+        if capacity < 1:
+            raise ValueError("capacity must be positive")
+        async with await self._lock_for(lobby_id):
+            queue = await self._required(lobby_id)
+            if capacity < len(queue.active):
+                raise QueueError("capacity cannot be below the active roster")
+            queue.capacity = capacity
+            promoted: list[int] = []
+            while len(queue.active) < capacity and queue.waitlist:
+                member = self._promote(queue)
+                if member:
+                    promoted.append(member.user_id)
+            await self._repository.save(queue)
+            return _copy_queue(queue), tuple(promoted)
+
     async def join(
         self, lobby_id: str, user_id: int, preferred_roles: tuple[str, ...] = ()
     ) -> tuple[PartyQueue, str]:
@@ -298,12 +314,16 @@ class PartyQueueService:
         lobby_id: str,
         user_id: int,
         status: ReadyStatus | str,
+        *,
+        now: datetime | None = None,
     ) -> tuple[PartyQueue, int | None]:
         status = ReadyStatus(status)
         async with await self._lock_for(lobby_id):
             queue = await self._required(lobby_id)
             if queue.status is not QueueStatus.READY_CHECK:
                 raise QueueError("ready check is not active")
+            if queue.ready_deadline and _utc(now) >= queue.ready_deadline:
+                raise QueueError("ready check has expired")
             if not any(member.user_id == user_id for member in queue.active):
                 raise QueueError("user is not an active member")
             promoted_id = None
@@ -312,6 +332,9 @@ class PartyQueueService:
                 queue.ready.pop(user_id, None)
                 promoted = self._promote(queue)
                 promoted_id = promoted.user_id if promoted else None
+                queue.status = QueueStatus.OPEN
+                queue.ready = {}
+                queue.ready_deadline = None
             elif status is ReadyStatus.NEED_5:
                 if queue.extensions_used >= self._max_extensions:
                     raise QueueError("ready-check extension limit reached")

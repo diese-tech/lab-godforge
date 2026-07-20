@@ -42,8 +42,10 @@ async def test_restart_preserves_ready_deadline_responses_extensions_and_status(
     await service.join("lobby", 11)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     started = await service.start_ready_check("lobby", now=now)
-    await service.respond("lobby", 10, ReadyStatus.READY)
-    extended, _ = await service.respond("lobby", 11, ReadyStatus.NEED_5)
+    await service.respond("lobby", 10, ReadyStatus.READY, now=now)
+    extended, _ = await service.respond(
+        "lobby", 11, ReadyStatus.NEED_5, now=now,
+    )
 
     restored = await SQLitePartyQueueRepository(path).load("lobby")
 

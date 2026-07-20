@@ -2322,6 +2322,30 @@ async def _ensure_party_queue(lobby):
         queue = await party_queue_service.get(lobby.lobby_id)
     if queue is None:
         raise RuntimeError("party queue could not be initialized")
+    if queue.capacity != lobby.capacity:
+        queue, promoted_ids = await party_queue_service.resize(
+            lobby.lobby_id,
+            lobby.capacity,
+        )
+        for promoted_id in promoted_ids:
+            promoted = party_repository.get_player_preferences(
+                lobby.guild_id,
+                promoted_id,
+            )
+            party_repository.save_participant(
+                lobby.guild_id,
+                lobby.lobby_id,
+                Participant(
+                    promoted_id,
+                    primary_role=promoted.primary_role,
+                    secondary_role=promoted.secondary_role,
+                    fill=promoted.fill,
+                    captain=promoted.captain,
+                ),
+                operation_id=(
+                    f"capacity-sync:{lobby.lobby_id}:{lobby.version}:{promoted_id}"
+                ),
+            )
     existing_ids = {member.user_id for member in (*queue.active, *queue.waitlist)}
     for participant in lobby.participants:
         if participant.user_id not in existing_ids:
@@ -2432,7 +2456,19 @@ async def _handle_lobby_card_action(
                 ephemeral=True,
             )
             return
+        if lobby.state not in {LobbyState.OPEN, LobbyState.FULL}:
+            await interaction.response.send_message(
+                "This lobby is not currently recruiting.",
+                ephemeral=True,
+            )
+            return
         queue = await _ensure_party_queue(lobby)
+        if queue.status is not QueueStatus.OPEN:
+            await interaction.response.send_message(
+                "A ready check is already active or this queue is closed.",
+                ephemeral=True,
+            )
+            return
         queue = await party_queue_service.start_ready_check(lobby_id)
         if lobby.state is LobbyState.OPEN and len(queue.active) == lobby.capacity:
             lobby = party_repository.transition(

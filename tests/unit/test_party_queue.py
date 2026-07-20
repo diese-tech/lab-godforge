@@ -30,6 +30,21 @@ async def test_concurrent_joins_respect_capacity_and_order_waitlist():
 
 
 @pytest.mark.asyncio
+async def test_resize_promotes_waitlist_and_rejects_active_underflow():
+    service = PartyQueueService(InMemoryPartyQueueRepository())
+    await service.create("resize", 1)
+    await service.join("resize", 1, ("solo",))
+    await service.join("resize", 2, ("mid",))
+
+    queue, promoted = await service.resize("resize", 2)
+
+    assert promoted == (2,)
+    assert [member.user_id for member in queue.active] == [1, 2]
+    with pytest.raises(QueueError, match="active roster"):
+        await service.resize("resize", 1)
+
+
+@pytest.mark.asyncio
 async def test_leave_promotes_role_coverage_before_waitlist_order():
     repo = InMemoryPartyQueueRepository()
     service = PartyQueueService(repo)
@@ -73,14 +88,35 @@ async def test_ready_drop_promotes_and_need_5_is_bounded():
     now = datetime(2026, 1, 1, tzinfo=UTC)
     started = await service.start_ready_check("lobby", now=now)
 
-    extended, _ = await service.respond("lobby", 1, ReadyStatus.NEED_5)
+    extended, _ = await service.respond(
+        "lobby", 1, ReadyStatus.NEED_5, now=now,
+    )
     assert extended.ready_deadline == started.ready_deadline + timedelta(minutes=5)
     with pytest.raises(QueueError, match="extension limit"):
-        await service.respond("lobby", 2, "need_5")
+        await service.respond("lobby", 2, "need_5", now=now)
 
-    dropped, promoted = await service.respond("lobby", 1, "drop")
+    dropped, promoted = await service.respond("lobby", 1, "drop", now=now)
     assert promoted == 3
     assert [member.user_id for member in dropped.active] == [2, 3]
+    assert dropped.status is QueueStatus.OPEN
+    assert dropped.ready_deadline is None
+
+
+@pytest.mark.asyncio
+async def test_response_after_deadline_is_rejected():
+    service = PartyQueueService(
+        InMemoryPartyQueueRepository(),
+        ready_timeout=timedelta(seconds=1),
+    )
+    await service.create("late", 1)
+    await service.join("late", 1)
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    await service.start_ready_check("late", now=now)
+
+    with pytest.raises(QueueError, match="expired"):
+        await service.respond(
+            "late", 1, ReadyStatus.READY, now=now + timedelta(seconds=2),
+        )
 
 
 @pytest.mark.asyncio
@@ -92,7 +128,7 @@ async def test_ready_timeout_can_cancel_entire_queue():
     await service.join("lobby", 2)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     await service.start_ready_check("lobby", now=now)
-    await service.respond("lobby", 1, "ready")
+    await service.respond("lobby", 1, "ready", now=now)
 
     queue, non_ready = await service.expire(
         "lobby", now=now + timedelta(seconds=31)
@@ -114,7 +150,7 @@ async def test_ready_timeout_can_drop_non_ready_and_promote():
     await service.join("lobby", 3)
     now = datetime(2026, 1, 1, tzinfo=UTC)
     await service.start_ready_check("lobby", now=now)
-    await service.respond("lobby", 1, "ready")
+    await service.respond("lobby", 1, "ready", now=now)
 
     queue, non_ready = await service.expire(
         "lobby", now=now + timedelta(seconds=31)
