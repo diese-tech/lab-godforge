@@ -12,9 +12,17 @@ Command surface and copy are locked in Issue #47 (Gate 3 / Gate 4).
 from __future__ import annotations
 
 import random
+from datetime import datetime, timedelta
 
+from utils.party import utc_now
+from utils.r67.matcher import is_qualifying
 from utils.r67.repository import GuildState, SQLiteR67Repository
-from utils.r67.selector import select_command
+from utils.r67.selector import select_command, select_passive
+
+# -- Passive reaction tuning (Gate 2/5, locked, not admin-configurable) --
+
+PASSIVE_TRIGGER_CHANCE = 0.07  # flat 7% roll per eligible message
+PASSIVE_COOLDOWN = timedelta(minutes=5)  # guild-wide, starts on success only
 
 # -- Command-reply copy (Gate 4, locked) ---------------------------------
 
@@ -56,6 +64,42 @@ class R67Service:
         exclude = self._last_response.get(guild_id)
         selection = select_command(self.rng, exclude=exclude)
         self._last_response[guild_id] = selection.text
+        return selection.text
+
+    # -- Passive reactions -----------------------------------------------
+
+    def handle_passive_message(
+        self,
+        guild_id: int,
+        text: str,
+        *,
+        now: datetime | None = None,
+    ) -> str | None:
+        """Process an ordinary guild message and return a passive reply or None.
+
+        Order is locked by Gate 7: opt-in → matcher → (Survivor tracking, added
+        with the tracker) → passive cooldown → 7% roll → weighted response →
+        persist cooldown. A failed roll never starts a cooldown.
+        """
+        now = now or utc_now()
+        state = self.repository.get_guild_state(guild_id)
+        if not state.reactions_enabled:
+            return None
+        if not is_qualifying(text):
+            return None
+
+        # (Survivor tracking is inserted here once the tracker lands; it must run
+        # regardless of the passive cooldown or the 7% roll outcome.)
+
+        if state.passive_cooldown_until is not None and now < state.passive_cooldown_until:
+            return None
+        if self.rng.random() >= PASSIVE_TRIGGER_CHANCE:
+            return None
+
+        exclude = self._last_response.get(guild_id)
+        selection = select_passive(self.rng, exclude=exclude)
+        self._last_response[guild_id] = selection.text
+        self.repository.set_passive_cooldown(guild_id, now + PASSIVE_COOLDOWN)
         return selection.text
 
     # -- Admin controls --------------------------------------------------

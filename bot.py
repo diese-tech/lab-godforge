@@ -514,6 +514,9 @@ async def on_message(message: discord.Message):
     if message.author == client.user or message.author.bot:
         return
     if not message.content.startswith("."):
+        # Ordinary chat: the only GodForge behavior here is optional passive
+        # 67 reactions. Everything else requires the dot-command prefix.
+        await _handle_r67_passive(message)
         return
 
     # ---- Deprecated economy commands (bypass parser — not handled there) ----
@@ -1213,6 +1216,27 @@ async def _handle_r67_command(message: discord.Message):
         can_manage_guild=_can_manage_guild(message),
     )
     await message.channel.send(reply)
+
+
+async def _handle_r67_passive(message: discord.Message):
+    """Adapter for optional passive 67 reactions on ordinary guild messages.
+
+    Passive reactions are opt-in per guild and skipped entirely in DMs or when
+    the guild has disabled GodForge. All matching, cooldown, and roll logic lives
+    in ``R67Service``; this boundary only guards eligibility and delivers text.
+    """
+    if message.guild is None:
+        return
+    guild_settings = settings.get_guild_settings(str(message.guild.id))
+    if not guild_settings["features"].get("botEnabled", True):
+        return
+    try:
+        response = r67_service.handle_passive_message(message.guild.id, message.content)
+    except Exception:
+        log.exception("r67 passive handler failed for guild %s", message.guild.id)
+        return
+    if response:
+        await message.channel.send(response)
 
 
 async def _handle_deprecated_economy_command(message: discord.Message, command: str):
