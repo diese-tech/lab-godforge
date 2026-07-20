@@ -33,6 +33,7 @@ Tag `v2.3.0` only after:
 
 - Durable party lifecycle and restart recovery are merged.
 - Zero-config per-guild setup and managed cosmetic roles are merged.
+- Captain-confirmed results and guild-scoped game-night history are merged.
 - Active help/command surfaces describe standalone GodForge only.
 - Public web and API documentation do not promote guarded legacy economy
   surfaces as current features.

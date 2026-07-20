@@ -94,6 +94,11 @@ Important status notes:
 - Full lobbies use a durable ordered waitlist and automatically start a ready
   check. Players can answer Ready, Need 5 Minutes, or Drop; dropped seats use
   deterministic role-aware promotion without server-wide pings.
+- GodForge stores standalone match records with two-captain winner
+  confirmation, organizer dispute resolution, explicit cancelled/no-contest
+  outcomes, and guild/team/player game-night history.
+- Game-night statistics cover appearances, wins, streaks, role frequency, and
+  teammate frequency. They contain no economy, betting, or payout behavior.
 
 ## Architecture / System Flow
 
