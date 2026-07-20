@@ -18,6 +18,7 @@ from utils.party import (
     LobbyState,
     Participant,
     PartyLobby,
+    PlayerPreferences,
     RecoveryRecord,
     ensure_utc,
     utc_now,
@@ -124,6 +125,37 @@ class SQLitePartyRepository:
             );
             """
         )
+        SQLitePartyRepository._add_columns(
+            conn,
+            "party_lobbies",
+            {
+                "mode": "TEXT NOT NULL DEFAULT 'standard'",
+                "region": "TEXT NOT NULL DEFAULT ''",
+                "format": "TEXT NOT NULL DEFAULT '5v5'",
+                "voice_required": "INTEGER NOT NULL DEFAULT 0",
+                "skill_band": "TEXT NOT NULL DEFAULT ''",
+                "notes": "TEXT NOT NULL DEFAULT ''",
+            },
+        )
+        preference_columns = {
+            "primary_role": "TEXT",
+            "secondary_role": "TEXT",
+            "fill": "INTEGER NOT NULL DEFAULT 0",
+            "captain": "INTEGER NOT NULL DEFAULT 0",
+        }
+        SQLitePartyRepository._add_columns(conn, "party_participants", preference_columns)
+        SQLitePartyRepository._add_columns(
+            conn, "party_player_preferences", preference_columns
+        )
+
+    @staticmethod
+    def _add_columns(conn, table: str, columns: dict[str, str]) -> None:
+        existing = {
+            row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        for name, declaration in columns.items():
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {declaration}")
 
     def create(
         self,
@@ -135,6 +167,12 @@ class SQLitePartyRepository:
         lobby_id: str | None = None,
         operation_id: str,
         delivery: DiscordDelivery | None = None,
+        mode: str = "standard",
+        region: str = "",
+        format: str = "5v5",
+        voice_required: bool = False,
+        skill_band: str = "",
+        notes: str = "",
     ) -> PartyLobby:
         # A Discord interaction retry must resolve to the same domain identity
         # even if its caller did not pre-allocate a lobby ID.
@@ -159,16 +197,25 @@ class SQLitePartyRepository:
                 created_at=now,
                 updated_at=now,
                 expires_at=expires_at,
+                mode=mode,
+                region=region,
+                format=format,
+                voice_required=voice_required,
+                skill_band=skill_band,
+                notes=notes,
             )
             conn.execute(
                 """INSERT INTO party_lobbies
                    (lobby_id,guild_id,organizer_id,capacity,state,created_at,
-                    updated_at,expires_at,version,delivery_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                    updated_at,expires_at,version,delivery_json,mode,region,format,
+                    voice_required,skill_band,notes)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     lobby.lobby_id, guild_id, organizer_id, capacity, lobby.state,
                     _encode_time(now), _encode_time(now), _encode_time(expires_at),
                     lobby.version, self._delivery_json(lobby.delivery),
+                    lobby.mode, lobby.region, lobby.format,
+                    int(lobby.voice_required), lobby.skill_band, lobby.notes,
                 ),
             )
             self._audit(conn, lobby, operation_id, fingerprint, "created", None, None)
@@ -177,6 +224,53 @@ class SQLitePartyRepository:
     def get(self, guild_id: int, lobby_id: str) -> PartyLobby | None:
         with self._connect() as conn:
             return self._get(conn, lobby_id, guild_id)
+
+    def update_metadata(
+        self,
+        guild_id: int,
+        lobby_id: str,
+        *,
+        operation_id: str,
+        actor_id: int,
+        mode: str,
+        region: str,
+        format: str,
+        capacity: int,
+        voice_required: bool,
+        skill_band: str = "",
+        notes: str = "",
+    ) -> PartyLobby:
+        fingerprint = (
+            f"metadata:{guild_id}:{lobby_id}:{mode}:{region}:{format}:{capacity}:"
+            f"{voice_required}:{skill_band}:{notes}"
+        )
+        with self._transaction() as conn:
+            if self._operation(conn, operation_id, fingerprint):
+                return self._require(conn, guild_id, lobby_id)
+            lobby = self._require(conn, guild_id, lobby_id)
+            if lobby.organizer_id != actor_id:
+                raise PermissionError("only the organizer can edit this lobby")
+            if lobby.is_terminal:
+                raise ValueError("cannot edit a terminal lobby")
+            if capacity < len(lobby.participants):
+                raise ValueError("capacity cannot be below the current roster")
+            conn.execute(
+                """UPDATE party_lobbies SET
+                   mode=?,region=?,format=?,capacity=?,voice_required=?,
+                   skill_band=?,notes=?,updated_at=?,version=version+1
+                   WHERE lobby_id=? AND guild_id=?""",
+                (
+                    mode.strip().lower(), region.strip().lower(), format.strip().lower(),
+                    capacity, int(voice_required), skill_band.strip().lower(),
+                    notes.strip(), _encode_time(utc_now()), lobby_id, guild_id,
+                ),
+            )
+            changed = self._require(conn, guild_id, lobby_id)
+            self._audit(
+                conn, changed, operation_id, fingerprint, "metadata_updated",
+                lobby.state, actor_id,
+            )
+            return changed
 
     def transition(
         self,
@@ -246,14 +340,20 @@ class SQLitePartyRepository:
                 raise ValueError("lobby is full")
             conn.execute(
                 """INSERT INTO party_participants
-                   (lobby_id,user_id,preferences_json,ready,joined_at)
-                   VALUES (?,?,?,?,?)
+                   (lobby_id,user_id,preferences_json,ready,joined_at,primary_role,
+                    secondary_role,fill,captain)
+                   VALUES (?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(lobby_id,user_id) DO UPDATE SET
-                     preferences_json=excluded.preferences_json, ready=excluded.ready""",
+                     preferences_json=excluded.preferences_json, ready=excluded.ready,
+                     primary_role=excluded.primary_role,
+                     secondary_role=excluded.secondary_role,fill=excluded.fill,
+                     captain=excluded.captain""",
                 (
                     lobby_id, participant.user_id,
                     json.dumps(participant.preferences), int(participant.ready),
                     _encode_time(participant.joined_at),
+                    participant.primary_role, participant.secondary_role,
+                    int(participant.fill), int(participant.captain),
                 ),
             )
             now = utc_now()
@@ -265,6 +365,48 @@ class SQLitePartyRepository:
             self._audit(conn, changed, operation_id, fingerprint, "participant_saved",
                         lobby.state, actor_id)
             return changed
+
+    def remove_participant(
+        self,
+        guild_id: int,
+        lobby_id: str,
+        user_id: int,
+        *,
+        operation_id: str,
+        actor_id: int | None = None,
+    ) -> PartyLobby:
+        fingerprint = f"participant_remove:{guild_id}:{lobby_id}:{user_id}"
+        with self._transaction() as conn:
+            if self._operation(conn, operation_id, fingerprint):
+                return self._require(conn, guild_id, lobby_id)
+            lobby = self._require(conn, guild_id, lobby_id)
+            if lobby.is_terminal:
+                raise ValueError("cannot change participants in a terminal lobby")
+            cursor = conn.execute(
+                "DELETE FROM party_participants WHERE lobby_id=? AND user_id=?",
+                (lobby_id, user_id),
+            )
+            if cursor.rowcount:
+                now = utc_now()
+                conn.execute(
+                    "UPDATE party_lobbies SET updated_at=?,version=version+1 "
+                    "WHERE lobby_id=?",
+                    (_encode_time(now), lobby_id),
+                )
+            changed = self._require(conn, guild_id, lobby_id)
+            self._audit(
+                conn,
+                changed,
+                operation_id,
+                fingerprint,
+                "participant_removed" if cursor.rowcount else "participant_remove_noop",
+                lobby.state,
+                actor_id,
+                {"user_id": user_id},
+            )
+            return changed
+
+    leave = remove_participant
 
     def set_delivery(
         self,
@@ -381,44 +523,79 @@ class SQLitePartyRepository:
             for row in rows
         ]
 
-    def get_player_preferences(self, guild_id: int, user_id: int) -> tuple[str, ...]:
+    def get_player_preferences(self, guild_id: int, user_id: int) -> PlayerPreferences:
         with self._connect() as conn:
             row = conn.execute(
-                "SELECT preferences_json FROM party_player_preferences "
+                "SELECT * FROM party_player_preferences "
                 "WHERE guild_id=? AND user_id=?",
                 (guild_id, user_id),
             ).fetchone()
-        return tuple(json.loads(row["preferences_json"])) if row else ()
+        if not row:
+            return PlayerPreferences()
+        legacy = tuple(json.loads(row["preferences_json"]))
+        gameplay_roles = tuple(
+            role
+            for role in legacy
+            if role in {"solo", "jungle", "mid", "support", "adc"}
+        )
+        return PlayerPreferences(
+            row["primary_role"] or (gameplay_roles[0] if gameplay_roles else None),
+            row["secondary_role"] or (
+                gameplay_roles[1] if len(gameplay_roles) > 1 else None
+            ),
+            bool(row["fill"]) or "fill" in legacy,
+            bool(row["captain"]) or "captain" in legacy,
+        )
 
     def set_player_preferences(
         self,
         guild_id: int,
         user_id: int,
-        preferences: tuple[str, ...] | list[str],
-    ) -> tuple[str, ...]:
-        normalized = tuple(
-            dict.fromkeys(
-                str(preference).strip().lower()
-                for preference in preferences
-                if str(preference).strip()
+        preferences: PlayerPreferences | tuple[str, ...] | list[str] = (),
+        *,
+        primary_role: str | None = None,
+        secondary_role: str | None = None,
+        fill: bool = False,
+        captain: bool = False,
+    ) -> PlayerPreferences:
+        if isinstance(preferences, PlayerPreferences):
+            profile = preferences
+        else:
+            normalized = tuple(
+                dict.fromkeys(
+                    str(preference).strip().lower()
+                    for preference in preferences
+                    if str(preference).strip()
+                )
             )
-        )
+            profile = PlayerPreferences(
+                primary_role or (normalized[0] if normalized else None),
+                secondary_role or (normalized[1] if len(normalized) > 1 else None),
+                fill,
+                captain,
+            )
         with self._transaction() as conn:
             conn.execute(
                 """INSERT INTO party_player_preferences
-                   (guild_id,user_id,preferences_json,updated_at)
-                   VALUES (?,?,?,?)
+                   (guild_id,user_id,preferences_json,updated_at,primary_role,
+                    secondary_role,fill,captain)
+                   VALUES (?,?,?,?,?,?,?,?)
                    ON CONFLICT(guild_id,user_id) DO UPDATE SET
                      preferences_json=excluded.preferences_json,
-                     updated_at=excluded.updated_at""",
+                     updated_at=excluded.updated_at,
+                     primary_role=excluded.primary_role,
+                     secondary_role=excluded.secondary_role,
+                     fill=excluded.fill,captain=excluded.captain""",
                 (
                     guild_id,
                     user_id,
-                    json.dumps(normalized),
+                    json.dumps(profile.roles),
                     _encode_time(utc_now()),
+                    profile.primary_role, profile.secondary_role,
+                    int(profile.fill), int(profile.captain),
                 ),
             )
-        return normalized
+        return profile
 
     @staticmethod
     def _operation(conn, operation_id: str, fingerprint: str):
@@ -475,6 +652,9 @@ class SQLitePartyRepository:
                     user_id=p["user_id"],
                     preferences=tuple(json.loads(p["preferences_json"])),
                     ready=bool(p["ready"]), joined_at=_decode_time(p["joined_at"]),
+                    primary_role=p["primary_role"],
+                    secondary_role=p["secondary_role"],
+                    fill=bool(p["fill"]), captain=bool(p["captain"]),
                 )
                 for p in participants
             ),
@@ -487,6 +667,9 @@ class SQLitePartyRepository:
             created_at=_decode_time(row["created_at"]),
             updated_at=_decode_time(row["updated_at"]),
             expires_at=_decode_time(row["expires_at"]), version=row["version"],
+            mode=row["mode"], region=row["region"], format=row["format"],
+            voice_required=bool(row["voice_required"]),
+            skill_band=row["skill_band"], notes=row["notes"],
         )
 
     @staticmethod

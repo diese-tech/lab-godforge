@@ -88,6 +88,9 @@ Important status notes:
 - The Play panel supports Create Lobby, Browse Lobbies, Join Queue, and My
   Preferences. Preference buttons update both Discord roles and durable
   GodForge player preferences.
+- Lobby creation captures mode, region, format, party size, voice requirement,
+  skill band, and notes. Reusable lobby cards support join, leave, edit, cancel,
+  and share actions without a web account.
 
 ## Architecture / System Flow
 

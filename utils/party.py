@@ -99,19 +99,76 @@ class DiscordDelivery:
 
 
 @dataclass(frozen=True, slots=True)
+class PlayerPreferences:
+    primary_role: str | None = None
+    secondary_role: str | None = None
+    fill: bool = False
+    captain: bool = False
+
+    def __post_init__(self) -> None:
+        primary = _normalize_optional(self.primary_role)
+        secondary = _normalize_optional(self.secondary_role)
+        if secondary == primary:
+            secondary = None
+        object.__setattr__(self, "primary_role", primary)
+        object.__setattr__(self, "secondary_role", secondary)
+
+    @property
+    def roles(self) -> tuple[str, ...]:
+        return tuple(role for role in (self.primary_role, self.secondary_role) if role)
+
+    def __eq__(self, other) -> bool:
+        # Preserve compatibility with the original tuple-based repository
+        # interface while callers migrate to the authoritative named fields.
+        if isinstance(other, (tuple, list)):
+            return self.roles == tuple(other)
+        if isinstance(other, PlayerPreferences):
+            return (
+                self.primary_role,
+                self.secondary_role,
+                self.fill,
+                self.captain,
+            ) == (
+                other.primary_role,
+                other.secondary_role,
+                other.fill,
+                other.captain,
+            )
+        return NotImplemented
+
+
+def _normalize_optional(value: str | None) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized or None
+
+
+@dataclass(frozen=True, slots=True)
 class Participant:
     user_id: int
     preferences: tuple[str, ...] = ()
     ready: bool = False
     joined_at: datetime = field(default_factory=utc_now)
+    primary_role: str | None = None
+    secondary_role: str | None = None
+    fill: bool = False
+    captain: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "joined_at", ensure_utc(self.joined_at))
-        object.__setattr__(
-            self,
-            "preferences",
-            tuple(dict.fromkeys(p.strip().lower() for p in self.preferences if p.strip())),
+        legacy = tuple(
+            dict.fromkeys(p.strip().lower() for p in self.preferences if p.strip())
         )
+        profile = PlayerPreferences(
+            self.primary_role or (legacy[0] if legacy else None),
+            self.secondary_role or (legacy[1] if len(legacy) > 1 else None),
+            self.fill,
+            self.captain,
+        )
+        object.__setattr__(self, "primary_role", profile.primary_role)
+        object.__setattr__(self, "secondary_role", profile.secondary_role)
+        object.__setattr__(self, "fill", profile.fill)
+        object.__setattr__(self, "captain", profile.captain)
+        object.__setattr__(self, "preferences", profile.roles)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +184,12 @@ class PartyLobby:
     updated_at: datetime = field(default_factory=utc_now)
     expires_at: datetime | None = None
     version: int = 1
+    mode: str = "standard"
+    region: str = ""
+    format: str = "5v5"
+    voice_required: bool = False
+    skill_band: str = ""
+    notes: str = ""
 
     def __post_init__(self) -> None:
         if not self.lobby_id.strip():
@@ -141,6 +204,11 @@ class PartyLobby:
         object.__setattr__(self, "created_at", ensure_utc(self.created_at))
         object.__setattr__(self, "updated_at", ensure_utc(self.updated_at))
         object.__setattr__(self, "expires_at", ensure_utc(self.expires_at))
+        object.__setattr__(self, "mode", _normalize_optional(self.mode) or "standard")
+        object.__setattr__(self, "region", _normalize_optional(self.region) or "")
+        object.__setattr__(self, "format", _normalize_optional(self.format) or "5v5")
+        object.__setattr__(self, "skill_band", _normalize_optional(self.skill_band) or "")
+        object.__setattr__(self, "notes", self.notes.strip())
 
     @property
     def is_terminal(self) -> bool:
