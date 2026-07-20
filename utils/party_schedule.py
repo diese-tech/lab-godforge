@@ -113,11 +113,33 @@ def parse_local_start(value: str, timezone_name: str, *, now: datetime | None = 
             ).index(label)
             offset = (target - local_now.weekday()) % 7 or 7
         day = (local_now + timedelta(days=offset)).date()
-    local = datetime.combine(day, clock, tzinfo=zone)
+    local = _strict_local_time(day, clock, zone)
     normalized = local.astimezone(timezone.utc)
     if normalized <= current:
         raise ScheduleError("scheduled time must be in the future")
     return normalized
+
+
+def _strict_local_time(day, clock, zone: ZoneInfo) -> datetime:
+    """Attach a zone without silently changing or guessing the requested wall time."""
+    naive = datetime.combine(day, clock)
+    candidates = tuple(
+        candidate
+        for fold in (0, 1)
+        if (
+            candidate := naive.replace(tzinfo=zone, fold=fold)
+        ).astimezone(timezone.utc).astimezone(zone).replace(tzinfo=None) == naive
+    )
+    if not candidates:
+        raise ScheduleError(
+            "that local time does not exist because of a daylight-saving clock change"
+        )
+    if len({candidate.utcoffset() for candidate in candidates}) > 1:
+        raise ScheduleError(
+            "that local time is ambiguous because of a daylight-saving clock change; "
+            "choose a time outside the repeated hour"
+        )
+    return candidates[0]
 
 
 def _parse_clock(value: str):
@@ -315,7 +337,14 @@ class ScheduleRepository:
                 (EventState.CONVERTED, lobby_id, event_id),
             )
             if event["recurrence"] == Recurrence.WEEKLY:
-                next_start = datetime.fromisoformat(event["starts_at"]) + timedelta(weeks=1)
+                zone = ZoneInfo(event["timezone_name"])
+                prior_local = datetime.fromisoformat(event["starts_at"]).astimezone(zone)
+                next_local = _strict_local_time(
+                    prior_local.date() + timedelta(weeks=1),
+                    prior_local.time().replace(tzinfo=None),
+                    zone,
+                )
+                next_start = next_local.astimezone(timezone.utc)
                 next_id = uuid.uuid5(
                     uuid.NAMESPACE_URL,
                     f"godforge:schedule:{event_id}:{next_start.isoformat()}",
@@ -419,7 +448,7 @@ async def convert_to_lobby(event: ScheduledNight, schedules: ScheduleRepository,
         operation_id=f"schedule:{event.event_id}:lobby",
         mode="custom",
         format="scheduled night",
-        notes=f"{event.title} · {event.recurrence.value}",
+        notes=f"{event.title} - {event.recurrence.value}",
     )
     queue = await queues.get(lobby_id)
     if queue is None:

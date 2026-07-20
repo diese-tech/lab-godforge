@@ -33,6 +33,10 @@ The deliberately small vocabulary is deterministic:
 Timezone abbreviations such as `EST` are rejected because they do not identify
 daylight-saving behavior. Scheduling depends on the pinned `tzdata` package so
 the same input normalizes consistently on Windows and Linux.
+Nonexistent spring-forward times and ambiguous fall-back times are rejected
+with a repair message instead of silently shifting or guessing. Weekly
+occurrences preserve the confirmed local weekday and wall-clock time across
+daylight-saving offset changes.
 
 ## Data and scope
 

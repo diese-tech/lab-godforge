@@ -30,6 +30,21 @@ def test_natural_time_requires_explicit_valid_timezone_and_normalizes_dst():
         parse_local_start("tomorrow 8 PM", "EST", now=NOW)
 
 
+def test_natural_time_rejects_nonexistent_and_ambiguous_dst_wall_times():
+    with pytest.raises(ScheduleError, match="does not exist"):
+        parse_local_start(
+            "2027-03-14 2:30 AM",
+            "America/New_York",
+            now=NOW,
+        )
+    with pytest.raises(ScheduleError, match="ambiguous"):
+        parse_local_start(
+            "2026-11-01 1:30 AM",
+            "America/New_York",
+            now=NOW,
+        )
+
+
 def _event(repository, *, recurrence=Recurrence.ONCE, capacity=2):
     return repository.create(
         guild_id=1,
@@ -108,6 +123,27 @@ def test_weekly_conversion_schedules_next_occurrence_once(tmp_path):
     upcoming = repository.list_upcoming(1, now=NOW)
     assert len(upcoming) == 1
     assert upcoming[0].starts_at == datetime(2026, 8, 1, 0, tzinfo=timezone.utc)
+
+
+def test_weekly_successor_preserves_local_wall_time_across_dst(tmp_path):
+    repository = ScheduleRepository(tmp_path / "party.db")
+    event = repository.create(
+        guild_id=1,
+        organizer_id=10,
+        title="Saturday Customs",
+        starts_at=datetime(2026, 11, 1, 0, tzinfo=timezone.utc),
+        timezone_name="America/New_York",
+        recurrence=Recurrence.WEEKLY,
+        capacity=10,
+        operation_id="dst-week",
+    )
+    repository.confirm(event.event_id, 10)
+    repository.mark_converted(event.event_id, "dst-lobby")
+
+    successor = repository.list_upcoming(
+        1, now=datetime(2026, 10, 31, tzinfo=timezone.utc)
+    )[0]
+    assert successor.starts_at == datetime(2026, 11, 8, 1, tzinfo=timezone.utc)
 
 
 def test_create_retry_and_confirm_are_idempotent(tmp_path):
