@@ -55,6 +55,17 @@ def test_role_preferences_are_persistent_with_stable_custom_ids():
         f"{ROLE_CUSTOM_ID_PREFIX}:{role_key}:v1"
         for role_key, _label, _style in ROLE_PREFERENCES
     ]
+    assert [button.label for button in view.children] == [
+        "Solo",
+        "Jungle",
+        "Mid",
+        "Support",
+        "ADC",
+        "Captain",
+        "Substitute",
+        "Region",
+        "LFG",
+    ]
 
 
 @pytest.mark.asyncio

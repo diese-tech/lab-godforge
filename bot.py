@@ -1834,8 +1834,20 @@ class _DiscordGuildSetupOperations:
             return False
         try:
             await channel.fetch_message(message_id)
-        except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+        except discord.NotFound:
             return False
+        except discord.Forbidden as exc:
+            raise SetupOperationError(
+                "panel_read_forbidden",
+                "GodForge cannot verify its stored Play panel. Grant Read "
+                "Message History and run setup again.",
+            ) from exc
+        except discord.HTTPException as exc:
+            raise SetupOperationError(
+                "panel_check_failed",
+                "Discord could not verify the stored Play panel. No duplicate "
+                "was created; retry setup shortly.",
+            ) from exc
         return True
 
     async def create_play_channel(self) -> int:
@@ -1969,9 +1981,26 @@ async def party_setup(
             managed["roleIds"],
             enabled_keys=enabled_role_keys,
         )
+        settings.update_guild_settings(
+            str(guild.id),
+            {
+                "managed": {
+                    "roleIds": {
+                        key: str(role_id)
+                        for key, role_id in role_result.role_ids.items()
+                    }
+                }
+            },
+            updated_by=f"discord:{interaction.user.id}",
+        )
         category_id = await _ensure_room_category(
             guild,
             managed.get("roomCategoryId", ""),
+        )
+        settings.update_guild_settings(
+            str(guild.id),
+            {"managed": {"roomCategoryId": str(category_id)}},
+            updated_by=f"discord:{interaction.user.id}",
         )
         setup_result = await GuildSetupService(
             _DiscordGuildSetupOperations(guild)
@@ -1984,6 +2013,24 @@ async def party_setup(
     except (ManagedRoleError, SetupOperationError, discord.DiscordException) as exc:
         await interaction.followup.send(str(exc), ephemeral=True)
         return
+    settings.update_guild_settings(
+        str(guild.id),
+        {
+            "managed": {
+                "playChannelId": (
+                    str(setup_result.references.panel_channel_id)
+                    if setup_result.references.panel_channel_id
+                    else ""
+                ),
+                "playMessageId": (
+                    str(setup_result.references.panel_message_id)
+                    if setup_result.references.panel_message_id
+                    else ""
+                ),
+            }
+        },
+        updated_by=f"discord:{interaction.user.id}",
+    )
     if not setup_result.ok:
         await interaction.followup.send(setup_result.message, ephemeral=True)
         return

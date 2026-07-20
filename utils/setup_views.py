@@ -29,6 +29,10 @@ ROLE_PREFERENCES = (
     ("mid", "Mid", discord.ButtonStyle.secondary),
     ("support", "Support", discord.ButtonStyle.secondary),
     ("adc", "ADC", discord.ButtonStyle.secondary),
+    ("captain", "Captain", discord.ButtonStyle.secondary),
+    ("substitute", "Substitute", discord.ButtonStyle.secondary),
+    ("region", "Region", discord.ButtonStyle.secondary),
+    ("lfg", "LFG", discord.ButtonStyle.secondary),
 )
 
 InteractionHandler = Callable[[discord.Interaction], Awaitable[None]]
