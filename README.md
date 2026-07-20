@@ -353,8 +353,9 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 - Stabilize the live dashboard bridge and OAuth permission checks.
 - Follow the sequencing and linked implementation issues in
   [`docs/STANDALONE_PRODUCT_PLAN.md`](docs/STANDALONE_PRODUCT_PLAN.md).
-- The `v2.3.0` release gate is zero-config guild setup, managed cosmetic roles,
-  and live validation of durable party recovery.
+- The `v2.3.0-rc.2` feature scope is complete. Stable `v2.3.0` remains gated
+  on live Discord recovery/permission checks and Railway/public-tools smoke
+  tests documented in [`RELEASE_PROCESS.md`](RELEASE_PROCESS.md).
 
 ## Contributing / Development Notes
 

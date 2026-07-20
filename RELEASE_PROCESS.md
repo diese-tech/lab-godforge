@@ -31,22 +31,23 @@ All gates passed. v2.2.0 shipped with the ForgeLens handoff contract, orchestrat
 
 Tag `v2.3.0` only after:
 
-- Durable party lifecycle and restart recovery are merged.
-- Zero-config per-guild setup and managed cosmetic roles are merged.
-- Captain-confirmed results and guild-scoped game-night history are merged.
-- Active help/command surfaces describe standalone GodForge only.
-- Public web and API documentation do not promote guarded legacy economy
+- [x] Durable party lifecycle and restart recovery are merged.
+- [x] Zero-config per-guild setup and managed cosmetic roles are merged.
+- [x] Captain-confirmed results and guild-scoped game-night history are merged.
+- [x] Scheduling, continuity, team formation, and scrim workflows are merged.
+- [x] Active help/command surfaces describe standalone GodForge only.
+- [x] Public web and API documentation do not promote guarded legacy economy
   surfaces as current features.
-- Optional companion compatibility remains disabled by default.
-- Version strings and release documentation agree.
-- Legacy web/API surfaces have an explicit removal or archive decision.
-- The active dashboard no longer renders economy, betting, wallet, or ledger
+- [x] Optional companion compatibility remains disabled by default.
+- [x] Version strings and release documentation agree at `v2.3.0-rc.2`.
+- [x] Legacy web/API surfaces have an explicit removal or archive decision.
+- [x] The active dashboard no longer renders economy, betting, wallet, or ledger
   controls; retained rollback code remains inaccessible by default.
-- A live Discord smoke test confirms setup, restart recovery, and permission
+- [ ] A live Discord smoke test confirms setup, restart recovery, and permission
   failure messaging.
-- Full local tests pass before push.
-- Required GitHub checks are green after push.
-- Railway health and the public tools URL pass a live smoke test.
+- [x] Full local tests pass before push.
+- [ ] Required GitHub checks are green on the `rc.2` candidate PR.
+- [ ] Railway health and the public tools URL pass a live smoke test.
 
 ## Tagging
 
