@@ -2098,6 +2098,12 @@ async def _handle_play_panel_action(
             view=LobbyCardView(_handle_lobby_card_action),
             ephemeral=True,
         )
+        for additional_lobby in active[1:]:
+            await interaction.followup.send(
+                embed=_lobby_card_embed(additional_lobby),
+                view=LobbyCardView(_handle_lobby_card_action),
+                ephemeral=True,
+            )
         return
     if action == "create":
         await interaction.response.send_modal(
@@ -2210,11 +2216,21 @@ async def _join_lobby_from_preferences(
         ),
         operation_id=f"discord:{interaction.id}:join",
     )
-    await interaction.response.send_message(
-        embed=_lobby_card_embed(changed),
-        view=LobbyCardView(_handle_lobby_card_action),
-        ephemeral=True,
-    )
+    if interaction.message is not None:
+        await interaction.message.edit(
+            embed=_lobby_card_embed(changed),
+            view=LobbyCardView(_handle_lobby_card_action),
+        )
+        await interaction.response.send_message(
+            f"Joined lobby `{changed.lobby_id[:8]}`.",
+            ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            embed=_lobby_card_embed(changed),
+            view=LobbyCardView(_handle_lobby_card_action),
+            ephemeral=True,
+        )
 
 
 def _lobby_card_embed(lobby) -> discord.Embed:
@@ -2260,9 +2276,16 @@ async def _handle_lobby_card_action(
         await interaction.response.send_message("Server-only action.", ephemeral=True)
         return
     lobby_id = _lobby_id_from_interaction(interaction)
+    active_ids = {
+        record.lobby.lobby_id
+        for record in party_repository.recover_active(guild_id)
+    }
     lobby = party_repository.get(guild_id, lobby_id)
-    if lobby is None:
-        await interaction.response.send_message("That lobby no longer exists.", ephemeral=True)
+    if lobby is None or lobby_id not in active_ids:
+        await interaction.response.send_message(
+            "That lobby is no longer active.",
+            ephemeral=True,
+        )
         return
     if action == "join":
         async def join_handler(join_interaction, payload):

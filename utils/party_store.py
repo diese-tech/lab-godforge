@@ -533,11 +533,18 @@ class SQLitePartyRepository:
         if not row:
             return PlayerPreferences()
         legacy = tuple(json.loads(row["preferences_json"]))
+        gameplay_roles = tuple(
+            role
+            for role in legacy
+            if role in {"solo", "jungle", "mid", "support", "adc"}
+        )
         return PlayerPreferences(
-            row["primary_role"] or (legacy[0] if legacy else None),
-            row["secondary_role"] or (legacy[1] if len(legacy) > 1 else None),
-            bool(row["fill"]),
-            bool(row["captain"]),
+            row["primary_role"] or (gameplay_roles[0] if gameplay_roles else None),
+            row["secondary_role"] or (
+                gameplay_roles[1] if len(gameplay_roles) > 1 else None
+            ),
+            bool(row["fill"]) or "fill" in legacy,
+            bool(row["captain"]) or "captain" in legacy,
         )
 
     def set_player_preferences(

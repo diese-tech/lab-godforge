@@ -85,6 +85,21 @@ def test_authoritative_preferences_are_structured_and_guild_scoped(tmp_path):
     assert SQLitePartyRepository(repo.path).get_player_preferences(2, 7) == ()
 
 
+def test_legacy_preference_keys_are_classified_during_migration(tmp_path):
+    repo = SQLitePartyRepository(tmp_path / "party.sqlite3")
+    with repo._connect() as conn:
+        conn.execute(
+            """INSERT INTO party_player_preferences
+               (guild_id,user_id,preferences_json,updated_at)
+               VALUES (1,7,'["captain","support","fill","substitute"]',
+                       '2026-07-20T00:00:00+00:00')"""
+        )
+
+    profile = repo.get_player_preferences(1, 7)
+
+    assert profile == PlayerPreferences("support", None, True, True)
+
+
 def test_remove_participant_is_idempotent_and_audited(tmp_path):
     repo = SQLitePartyRepository(tmp_path / "party.sqlite3")
     repo.create(
