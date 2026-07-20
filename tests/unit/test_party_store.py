@@ -122,6 +122,28 @@ def test_delivery_references_can_be_reconciled_without_changing_identity(tmp_pat
     assert changed.delivery.team_channel_ids == (23, 24)
 
 
+def test_organizer_transfer_is_scoped_durable_and_audited(tmp_path):
+    repo = repository(tmp_path)
+    repo.create(
+        guild_id=1, organizer_id=2, capacity=5, lobby_id="lobby",
+        operation_id="create",
+    )
+    repo.save_participant(1, "lobby", Participant(2), operation_id="join-owner")
+    repo.save_participant(1, "lobby", Participant(3), operation_id="join-next")
+
+    changed = repo.transfer_organizer(
+        1, "lobby", 3, operation_id="transfer", actor_id=2
+    )
+
+    assert changed.organizer_id == 3
+    assert SQLitePartyRepository(repo.path).get(1, "lobby").organizer_id == 3
+    assert repo.audit_events(1, "lobby")[-1].event_type == "organizer_transferred"
+    with pytest.raises(PermissionError):
+        repo.transfer_organizer(
+            1, "lobby", 2, operation_id="old-owner", actor_id=2
+        )
+
+
 def test_terminal_lobbies_are_not_returned_for_recovery(tmp_path):
     repo = repository(tmp_path)
     for index, terminal in enumerate((LobbyState.CANCELLED, LobbyState.EXPIRED)):

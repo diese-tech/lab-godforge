@@ -99,6 +99,11 @@ Important status notes:
   outcomes, and guild/team/player game-night history.
 - Game-night statistics cover appearances, wins, streaks, role frequency, and
   teammate frequency. They contain no economy, betting, or payout behavior.
+- A successful ready check creates a private coordination channel and optional
+  team voice rooms in the setup-managed category. `/party room` gives only the
+  lobby organizer scoped lock, unlock, remove, transfer, voice-move, and close
+  controls. Room records survive restarts, reconcile missing resources, archive
+  a summary, and remove empty voice rooms after a grace period.
 
 ## Architecture / System Flow
 
@@ -184,6 +189,13 @@ Without a count, build commands return 6 items. Counts outside 1-5 are ignored b
 | Command | Result |
 | --- | --- |
 | `.help` | Show bot command pages |
+
+Party setup and temporary-room controls use Discord slash commands:
+
+| Command | Result |
+| --- | --- |
+| `/party setup` | Provision the Play panel, managed roles, and room category |
+| `/party room` | Organizer-only temporary-room controls for one lobby |
 
 ## Setup
 
