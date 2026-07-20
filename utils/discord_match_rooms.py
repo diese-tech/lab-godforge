@@ -15,6 +15,7 @@ class DiscordMatchRoomOperations:
         archive_channel_id: int,
     ):
         self.guild = guild
+        self.guild_id = guild.id
         self.category_id = category_id
         self.archive_channel_id = archive_channel_id
 
@@ -96,20 +97,37 @@ class DiscordMatchRoomOperations:
         )
 
     async def set_locked(
-        self, resource_ids: tuple[int, ...], locked: bool
+        self,
+        resource_ids: tuple[int, ...],
+        participant_ids: tuple[int, ...],
+        locked: bool,
     ) -> None:
-        overwrite = discord.PermissionOverwrite(
-            view_channel=False if locked else None,
-            connect=False if locked else None,
-        )
         for resource_id in resource_ids:
             channel = self.guild.get_channel(resource_id)
             if channel:
                 await channel.set_permissions(
                     self.guild.default_role,
-                    overwrite=overwrite,
+                    overwrite=discord.PermissionOverwrite(
+                        view_channel=False,
+                        connect=False,
+                    ),
                     reason="GodForge organizer room control",
                 )
+                for user_id in participant_ids:
+                    member = self.guild.get_member(user_id)
+                    if member is None:
+                        continue
+                    await channel.set_permissions(
+                        member,
+                        overwrite=discord.PermissionOverwrite(
+                            view_channel=True,
+                            read_message_history=True,
+                            send_messages=not locked,
+                            connect=not locked,
+                            speak=not locked,
+                        ),
+                        reason="GodForge organizer room control",
+                    )
 
     async def remove_player(
         self, resource_ids: tuple[int, ...], user_id: int

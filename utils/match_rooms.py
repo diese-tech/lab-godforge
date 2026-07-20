@@ -48,6 +48,8 @@ class MatchRooms:
 
 
 class MatchRoomOperations(Protocol):
+    guild_id: int
+
     async def resource_exists(self, resource_id: int) -> bool: ...
 
     async def create_private_rooms(
@@ -59,7 +61,12 @@ class MatchRoomOperations(Protocol):
         create_team_voice: bool,
     ) -> tuple[int, int | None, int | None]: ...
 
-    async def set_locked(self, resource_ids: tuple[int, ...], locked: bool) -> None: ...
+    async def set_locked(
+        self,
+        resource_ids: tuple[int, ...],
+        participant_ids: tuple[int, ...],
+        locked: bool,
+    ) -> None: ...
 
     async def remove_player(self, resource_ids: tuple[int, ...], user_id: int) -> None: ...
 
@@ -129,12 +136,15 @@ class SQLiteMatchRoomRepository:
             ).fetchone()
         return self._decode(row) if row else None
 
-    def active(self) -> tuple[MatchRooms, ...]:
+    def active(self, guild_id: int | None = None) -> tuple[MatchRooms, ...]:
+        query = "SELECT * FROM party_match_rooms WHERE state != ?"
+        params: list[object] = [RoomState.CLOSED]
+        if guild_id is not None:
+            query += " AND guild_id=?"
+            params.append(guild_id)
+        query += " ORDER BY updated_at"
         with self._connect() as conn:
-            rows = conn.execute(
-                "SELECT * FROM party_match_rooms WHERE state != ? ORDER BY updated_at",
-                (RoomState.CLOSED,),
-            ).fetchall()
+            rows = conn.execute(query, params).fetchall()
         return tuple(self._decode(row) for row in rows)
 
     def save(self, rooms: MatchRooms) -> MatchRooms:
@@ -222,6 +232,8 @@ class MatchRoomService:
         rooms = self._required(lobby_id)
         if rooms.state is RoomState.CLOSED:
             return rooms
+        if rooms.state is RoomState.CLOSING:
+            return await self._archive_and_delete(rooms, "resumed cleanup")
         existence = [
             await self.operations.resource_exists(resource_id)
             for resource_id in rooms.resource_ids
@@ -246,7 +258,7 @@ class MatchRoomService:
 
     async def reconcile_all(self) -> tuple[MatchRooms, ...]:
         reconciled = []
-        for rooms in self.repository.active():
+        for rooms in self.repository.active(self.operations.guild_id):
             try:
                 reconciled.append(await self.reconcile(rooms.lobby_id))
             except Exception:
@@ -257,12 +269,16 @@ class MatchRoomService:
 
     async def lock(self, lobby_id: str, *, actor_id: int) -> MatchRooms:
         rooms = self._authorized(lobby_id, actor_id)
-        await self.operations.set_locked(rooms.resource_ids, True)
+        await self.operations.set_locked(
+            rooms.resource_ids, rooms.participant_ids, True
+        )
         return self.repository.save(replace(rooms, state=RoomState.LOCKED))
 
     async def unlock(self, lobby_id: str, *, actor_id: int) -> MatchRooms:
         rooms = self._authorized(lobby_id, actor_id)
-        await self.operations.set_locked(rooms.resource_ids, False)
+        await self.operations.set_locked(
+            rooms.resource_ids, rooms.participant_ids, False
+        )
         return self.repository.save(replace(rooms, state=RoomState.OPEN))
 
     async def remove_player(
@@ -379,7 +395,7 @@ class MatchRoomService:
     ) -> tuple[str, ...]:
         current = _utc(now)
         cleaned = []
-        for rooms in self.repository.active():
+        for rooms in self.repository.active(self.operations.guild_id):
             if (
                 rooms.state is RoomState.CLOSING
                 and rooms.empty_since is not None
@@ -425,6 +441,9 @@ class MatchRoomService:
     async def _archive_and_delete(
         self, rooms: MatchRooms, reason: str
     ) -> MatchRooms:
+        rooms = self.repository.save(
+            replace(rooms, state=RoomState.CLOSING, empty_since=rooms.empty_since or _utc_now())
+        )
         summary = {
             "lobby_id": rooms.lobby_id,
             "guild_id": rooms.guild_id,
@@ -433,7 +452,12 @@ class MatchRoomService:
             "reason": reason,
             "closed_at": _encode_time(_utc_now()),
         }
-        archive_id = await self.operations.archive_summary(summary)
+        archive_id = rooms.archive_message_id
+        if archive_id is None:
+            archive_id = await self.operations.archive_summary(summary)
+            rooms = self.repository.save(
+                replace(rooms, archive_message_id=archive_id)
+            )
         await self.operations.delete_resources(rooms.resource_ids)
         return self.repository.save(
             replace(

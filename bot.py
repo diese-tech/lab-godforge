@@ -348,9 +348,7 @@ async def on_ready():
         log.info("Recovered %s active party lobby record(s)", len(recoverable_lobbies))
     for guild in client.guilds:
         guild_rooms = tuple(
-            rooms
-            for rooms in match_room_repository.active()
-            if rooms.guild_id == guild.id
+            match_room_repository.active(guild.id)
         )
         if not guild_rooms:
             continue
@@ -396,9 +394,7 @@ async def cleanup_task():
 
     for guild in client.guilds:
         guild_rooms = tuple(
-            rooms
-            for rooms in match_room_repository.active()
-            if rooms.guild_id == guild.id
+            match_room_repository.active(guild.id)
         )
         if not guild_rooms:
             continue
@@ -455,7 +451,7 @@ async def on_voice_state_update(member, before, after):
     }
     if not changed_ids:
         return
-    for rooms in match_room_repository.active():
+    for rooms in match_room_repository.active(member.guild.id):
         if not changed_ids.intersection(rooms.team_voice_ids):
             continue
         guild = member.guild
@@ -3090,13 +3086,6 @@ async def _handle_ready_check_action(
     if everyone_ready:
         room_failure = None
         lobby = party_repository.get(guild_id, lobby_id)
-        if lobby and lobby.state is LobbyState.READY_CHECK:
-            lobby = party_repository.transition(
-                guild_id,
-                lobby_id,
-                LobbyState.FORMING,
-                operation_id=f"discord:{interaction.id}:forming",
-            )
         if lobby and interaction.guild:
             try:
                 rooms = await _match_room_service_for_guild(
@@ -3122,15 +3111,30 @@ async def _handle_ready_check_action(
                     )
             except (discord.Forbidden, discord.HTTPException, RuntimeError) as exc:
                 room_failure = str(exc)
+        if (
+            room_failure is None
+            and lobby
+            and lobby.state is LobbyState.READY_CHECK
+        ):
+            lobby = party_repository.transition(
+                guild_id,
+                lobby_id,
+                LobbyState.FORMING,
+                operation_id=f"discord:{interaction.id}:forming",
+            )
         await interaction.response.edit_message(
             content=(
                 "Everyone is ready. GodForge is forming the match."
                 if room_failure is None
                 else "Everyone is ready, but GodForge could not create temporary "
-                f"rooms: {room_failure}"
+                f"rooms: {room_failure}. Fix the permission and press Ready again."
             ),
             embed=_ready_check_embed(lobby_id, queue),
-            view=None,
+            view=(
+                None
+                if room_failure is None
+                else ReadyCheckView(_handle_ready_check_action)
+            ),
         )
         return
     await interaction.response.edit_message(

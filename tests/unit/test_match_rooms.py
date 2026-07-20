@@ -12,6 +12,7 @@ from utils.match_rooms import (
 
 class FakeRooms:
     def __init__(self):
+        self.guild_id = 1
         self.resources = {}
         self.created = 0
         self.archives = []
@@ -19,6 +20,7 @@ class FakeRooms:
         self.fail_moves = set()
         self.fail_create = False
         self.fail_transfer = False
+        self.fail_delete = False
 
     async def resource_exists(self, resource_id):
         return resource_id in self.resources
@@ -40,7 +42,7 @@ class FakeRooms:
             self.resources[ids[2]] = "voice"
         return ids
 
-    async def set_locked(self, resource_ids, locked):
+    async def set_locked(self, resource_ids, participant_ids, locked):
         return None
 
     async def remove_player(self, resource_ids, user_id):
@@ -62,6 +64,8 @@ class FakeRooms:
         return 999
 
     async def delete_resources(self, resource_ids):
+        if self.fail_delete:
+            raise RuntimeError("Discord deletion failed")
         for resource_id in resource_ids:
             self.resources.pop(resource_id, None)
 
@@ -290,3 +294,62 @@ async def test_repeated_empty_events_preserve_original_grace_deadline(tmp_path):
 
     assert repeated.empty_since == first.empty_since == now
     assert await service.cleanup_due(now=now + timedelta(minutes=5)) == ("lobby",)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_due_only_processes_adapter_guild(tmp_path):
+    now = datetime(2026, 7, 20, tzinfo=UTC)
+    repository = SQLiteMatchRoomRepository(tmp_path / "party.db")
+    guild_one_ops = FakeRooms()
+    guild_two_ops = FakeRooms()
+    guild_two_ops.guild_id = 2
+    guild_one = MatchRoomService(
+        repository, guild_one_ops, empty_grace=timedelta(0)
+    )
+    guild_two = MatchRoomService(
+        repository, guild_two_ops, empty_grace=timedelta(0)
+    )
+    await guild_one.provision(
+        guild_id=1, lobby_id="one", organizer_id=10,
+        participant_ids=(10, 11), create_team_voice=True,
+    )
+    await guild_two.provision(
+        guild_id=2, lobby_id="two", organizer_id=20,
+        participant_ids=(20, 21), create_team_voice=True,
+    )
+    await guild_one.mark_empty("one", at=now)
+    await guild_two.mark_empty("two", at=now)
+
+    assert await guild_one.cleanup_due(now=now) == ("one",)
+    assert (await guild_two.get("two")).state is RoomState.CLOSING
+    assert guild_one_ops.archives[0]["guild_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_restart_resumes_persisted_closing_intent_without_recreating(tmp_path):
+    path = tmp_path / "party.db"
+    ops = FakeRooms()
+    service = MatchRoomService(SQLiteMatchRoomRepository(path), ops)
+    await service.provision(
+        guild_id=1, lobby_id="lobby", organizer_id=10,
+        participant_ids=(10, 11), create_team_voice=True,
+    )
+    ops.fail_delete = True
+
+    with pytest.raises(RuntimeError, match="deletion failed"):
+        await service.close("lobby", actor_id=10)
+
+    interrupted = await service.get("lobby")
+    assert interrupted.state is RoomState.CLOSING
+    assert interrupted.archive_message_id == 999
+    assert len(ops.archives) == 1
+
+    ops.fail_delete = False
+    created_before = ops.created
+    restored = await MatchRoomService(
+        SQLiteMatchRoomRepository(path), ops
+    ).reconcile("lobby")
+
+    assert restored.state is RoomState.CLOSED
+    assert ops.created == created_before
+    assert len(ops.archives) == 1
