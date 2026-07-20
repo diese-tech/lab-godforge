@@ -2557,6 +2557,14 @@ async def _launch_party_draft(
             ephemeral=True,
         )
         return
+    existing_launch = party_draft_repository.get(lobby.lobby_id)
+    if existing_launch and existing_launch.status == "active":
+        _reconcile_active_party_draft(lobby, existing_launch, interaction.user.id)
+        await interaction.response.send_message(
+            f"Draft `{existing_launch.match_id}` is already active.",
+            ephemeral=True,
+        )
+        return
     if lobby.state is not LobbyState.FORMING:
         await interaction.response.send_message(
             "Finish the ready check before launching a draft.",
@@ -2576,6 +2584,7 @@ async def _launch_party_draft(
 
     await interaction.response.defer(ephemeral=True)
     launch = None
+    draft_started = False
     try:
         launch, should_start = party_draft_repository.begin(
             lobby,
@@ -2584,11 +2593,11 @@ async def _launch_party_draft(
             match_id_factory=match_ids.reserve_match_id,
         )
         if not should_start:
-            message = (
-                f"Draft `{launch.match_id}` is already active."
-                if launch.status == "active"
-                else "That draft launch is already in progress."
-            )
+            if launch.status == "active":
+                _reconcile_active_party_draft(lobby, launch, interaction.user.id)
+                message = f"Draft `{launch.match_id}` is already active."
+            else:
+                message = "That draft launch is already in progress."
             await interaction.followup.send(message, ephemeral=True)
             return
 
@@ -2644,13 +2653,8 @@ async def _launch_party_draft(
             _save_active_draft(channel.id, draft.draft_id)
 
         launch = party_draft_repository.mark_active(lobby.lobby_id)
-        party_repository.transition(
-            lobby.guild_id,
-            lobby.lobby_id,
-            LobbyState.ACTIVE,
-            operation_id=f"discord:{interaction.id}:draft-active",
-            actor_id=interaction.user.id,
-        )
+        draft_started = True
+        _reconcile_active_party_draft(lobby, launch, interaction.user.id)
         await channel.send(
             f"⚔️ Draft `{launch.match_id}` launched from lobby `{lobby.lobby_id[:8]}`.\n"
             f"🔵 Captain <@{launch.blue.captain_id}>: "
@@ -2664,14 +2668,40 @@ async def _launch_party_draft(
             ephemeral=True,
         )
     except Exception as exc:
-        if launch is not None:
+        if launch is not None and not draft_started:
             party_draft_repository.mark_failed(lobby.lobby_id, str(exc))
         log.exception("Party draft launch failed for lobby %s", lobby.lobby_id)
-        await interaction.followup.send(
-            "Draft launch failed. The lobby is still ready to retry with "
-            "`Launch Draft`. " + str(exc),
-            ephemeral=True,
+        if draft_started:
+            await interaction.followup.send(
+                f"Draft `{launch.match_id}` started, but GodForge could not refresh "
+                "the lobby card. Press `Launch Draft` again to reconcile it safely. "
+                + str(exc),
+                ephemeral=True,
+            )
+        else:
+            await interaction.followup.send(
+                "Draft launch failed. The lobby is still ready to retry with "
+                "`Launch Draft`. " + str(exc),
+                ephemeral=True,
+            )
+
+
+def _reconcile_active_party_draft(lobby, launch, actor_id: int) -> None:
+    """Idempotently project a successfully started draft onto its party lobby."""
+    current = party_repository.get(lobby.guild_id, lobby.lobby_id)
+    if current is None or current.state is LobbyState.ACTIVE:
+        return
+    if current.state is not LobbyState.FORMING:
+        raise PartyDraftError(
+            f"active draft cannot reconcile lobby from {current.state}"
         )
+    party_repository.transition(
+        lobby.guild_id,
+        lobby.lobby_id,
+        LobbyState.ACTIVE,
+        operation_id=f"party-draft-active:{lobby.lobby_id}:{launch.match_id}",
+        actor_id=actor_id,
+    )
 
 
 def _ready_check_embed(lobby_id: str, queue) -> discord.Embed:

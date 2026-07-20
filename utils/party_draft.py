@@ -111,12 +111,12 @@ class PartyDraftLaunchRepository:
                 "SELECT * FROM party_draft_launches WHERE lobby_id=? OR operation_id=?",
                 (lobby.lobby_id, operation_id),
             ).fetchone()
-            if row and row["status"] in {"pending", "active"}:
-                conn.commit()
-                return _decode(row), False
             if row and row["lobby_id"] != lobby.lobby_id:
                 conn.rollback()
                 raise PartyDraftError("interaction ID was already used by another lobby")
+            if row and row["status"] in {"pending", "active"}:
+                conn.commit()
+                return _decode(row), False
 
             match_id = match_id_factory()
             now = utc_now().isoformat()
@@ -161,7 +161,19 @@ class PartyDraftLaunchRepository:
         return self._finish(lobby_id, "active", match_id=match_id)
 
     def mark_failed(self, lobby_id: str, error: str) -> PartyDraftLaunch:
-        return self._finish(lobby_id, "failed", error=error[:500])
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                """UPDATE party_draft_launches
+                   SET status='failed', error=?, updated_at=?
+                   WHERE lobby_id=? AND status='pending'""",
+                (error[:500], utc_now().isoformat(), lobby_id),
+            )
+            row = conn.execute(
+                "SELECT * FROM party_draft_launches WHERE lobby_id=?", (lobby_id,)
+            ).fetchone()
+            if row is None:
+                raise PartyDraftError("draft launch was not reserved")
+            return _decode(row)
 
     def get(self, lobby_id: str) -> PartyDraftLaunch | None:
         with self._connect() as conn:

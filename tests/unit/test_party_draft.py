@@ -115,6 +115,41 @@ def test_successful_launch_blocks_new_interaction_duplicates(tmp_path):
     assert duplicate.match_id == "GF-0042"
 
 
+def test_operation_id_reuse_by_another_lobby_is_rejected(tmp_path):
+    repo = PartyDraftLaunchRepository(tmp_path / "party.db")
+    repo.begin(
+        _ready_lobby(),
+        operation_id="interaction-1",
+        channel_id=500,
+        match_id_factory=lambda: "GF-0042",
+    )
+    other = replace(_ready_lobby(), lobby_id="lobby-2")
+
+    with pytest.raises(PartyDraftError, match="another lobby"):
+        repo.begin(
+            other,
+            operation_id="interaction-1",
+            channel_id=501,
+            match_id_factory=lambda: "GF-0043",
+        )
+
+
+def test_active_launch_cannot_be_downgraded_to_failed(tmp_path):
+    repo = PartyDraftLaunchRepository(tmp_path / "party.db")
+    launch, _ = repo.begin(
+        _ready_lobby(),
+        operation_id="interaction-1",
+        channel_id=500,
+        match_id_factory=lambda: "GF-0042",
+    )
+    repo.mark_active(launch.lobby_id)
+
+    unchanged = repo.mark_failed(launch.lobby_id, "notification failed")
+
+    assert unchanged.status == "active"
+    assert unchanged.error == ""
+
+
 def test_local_draft_export_retains_party_context():
     lobby = _ready_lobby()
     draft = DraftManager().start(
