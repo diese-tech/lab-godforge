@@ -22,9 +22,12 @@ Important status notes:
 
 - Randomizer, build, session, and local draft commands are implemented in `bot.py` and `utils/`.
 - Activity backend draft integration is optional and enabled only when `ACTIVITY_BACKEND_URL` is configured.
-- Session and local draft state are in memory and reset on process restart.
+- Legacy `.session` state is in memory. Local drafts persist orphan channel
+  references for restart notices; the new party-lobby foundation persists full
+  guild-scoped lifecycle records in SQLite.
 - Legacy ledger and wallet modules still exist for migration/testing, but they are not part of the active Discord command surface.
-- Some server/report routing is still single-tenant by hard-coded IDs in `bot.py`.
+- Owner and report routing are configured through environment variables, but
+  per-guild self-service configuration is still planned.
 
 ## Core Features
 
@@ -57,12 +60,6 @@ Important status notes:
 - Draft exports are posted as portable JSON attachments at the end of a set.
 - When claims finish, GodForge posts a visible `Draft complete` marker in-channel for observers.
 - Completed game picks, not bans, populate the fearless pool.
-
-### Deprecated Economy Commands
-
-- `.match`, `.bet`, `.wallet`, and `.ledger` are deprecated in GodForge and do not mutate Discord-side state.
-- Betting, wallets, ledgers, and settlement are outside GodForge's scope.
-- GodForge keeps match orchestration in `.draft start`, `.ban`, `.pick`, `.draft next`, `.draft undo`, and `.draft end`.
 
 ### Web Dashboard And API Bridge
 
@@ -152,22 +149,12 @@ Without a count, build commands return 6 items. Counts outside 1-5 are ignored b
 | Command | Result |
 | --- | --- |
 | `.draft start @blue @red` | Start a draft set with blue/red captains |
-| `.draft start @blue @red --match FL-123 --game 2` | Start a draft linked to a ForgeLens match and explicit series game |
 | `.ban GodName` | Ban a god on the active captain's turn |
 | `.pick GodName` | Pick a god on the active captain's turn |
 | `.draft show` | Show draft history and fearless pool |
 | `.draft next` | Lock the current game and advance |
 | `.draft undo` | Undo the last draft action or game advance |
 | `.draft end` | End the set and attach a JSON export |
-
-### Deprecated Economy Commands
-
-| Command | Who | Result |
-| --- | --- | --- |
-| `.match ...` | Any | Deprecated; standalone results are planned |
-| `.bet ...` | Any | Deprecated; betting is out of scope |
-| `.wallet ...` | Any | Deprecated; wallets are out of scope |
-| `.ledger ...` | Any | Deprecated; economy ledgers are out of scope |
 
 ### Utility
 
@@ -291,9 +278,10 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 ## Operational Notes
 
 - Unknown dot commands are ignored unless a dashboard custom command matches.
-- `.match`, `.bet`, `.wallet`, and `.ledger` are routed to a deprecation response in `bot.py`.
-- Draft exports include `schema_version`, `event_type`, `status`, `draft_id`, optional `forgelens_match_id`, legacy `match_id`, guild/channel context, game linkage, captains/teams, picks, bans, claims, timestamps, and draft order for ForgeLens import.
-- The reports channel map and one privileged user ID in `bot.py` are hard-coded single-tenant constants.
+- Draft exports include stable identity, guild/channel context, game linkage,
+  captains/teams, picks, bans, claims, timestamps, and draft order.
+- Owner and reports routing use `GODFORGE_OWNER_USER_ID` and
+  `GODFORGE_REPORTS_CHANNELS`.
 - Session and draft cleanup runs every 5 minutes. In-memory session state is lost on restart; active local drafts notify their channel on restart via `data/active_local_drafts.json`.
 - Data JSON is cached by loaders; restart the bot after changing god/build/alias data.
 - Dashboard auth is transitional: temporary password and staged OAuth exist, but full guild permission enforcement is future work.
@@ -301,39 +289,32 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 
 ## Known Issues / Refactor Targets
 
-- Move hard-coded guild/report routing into per-guild configuration.
+- Move environment-based guild/report routing into self-service per-guild configuration.
 - Add or finish durable per-guild storage for settings, reports channels, and custom commands.
 - Remove remaining legacy ledger/wallet internals after compatibility windows close.
 - Review match ID generation and channel/server scoping before running one bot across unrelated leagues.
 - Persist or recover full session state across restarts (draft orphan notifications are implemented; full state recovery is not).
 - Audit Activity backend mode for retry, reconnect, and failure behavior around WebSocket draft state.
 - Tighten dashboard authorization so admin actions require verified Discord guild permissions.
-- Keep GodForge focused on match orchestration and portable draft handoff.
+- Keep GodForge focused on standalone party and match orchestration.
 
-## Draft JSON Contract
+## Optional Compatibility Appendix
 
-- `draft_id` is GodForge-owned and stable for the draft session.
-- `forgelens_match_id` is optional and lets multiple draft exports link back to one ForgeLens match.
-- `match_id` is kept as a legacy alias for older consumers; do not assume it is the ForgeLens match id.
-- `status` is `draft_complete` only after picks/bans are finished and all drafted gods are claimed.
-
-## Bo3 / Bo5 Notes
-
-- A single ForgeLens match can observe multiple GodForge drafts or multiple game exports through the shared `forgelens_match_id`.
-- Use `--game` to label the current game number when starting an externally linked draft.
-- `draft_sequence` is included in embeds and JSON so ForgeLens has a stable contract field even when series handling expands later.
+- `draft_id` is GodForge-owned and stable.
+- `GODFORGE_ENABLE_FORGELENS=true` enables the optional adapter and external
+  match linkage. It is disabled by default and cannot block a core workflow.
+- Legacy web economy endpoints are default-off migration surfaces documented in
+  [`docs/archive/LEGACY_WEB_DATA_CONTRACT.md`](docs/archive/LEGACY_WEB_DATA_CONTRACT.md).
 
 ## Roadmap
 
 - See [`docs/STANDALONE_PRODUCT_PLAN.md`](docs/STANDALONE_PRODUCT_PLAN.md) for
   the standalone GodForge product direction and phased implementation plan.
 - Stabilize the live dashboard bridge and OAuth permission checks.
-- Move single-tenant constants into guild-scoped config.
-- Add a safer durable backing store for orchestration data where JSON is too fragile.
-- Improve draft and match recovery after restarts.
-- Add standalone party formation, lightweight results, and game-night history.
-- Keep ForgeLens as an optional disabled-by-default compatibility adapter;
-  economy and betting remain out of scope.
+- Follow the sequencing and linked implementation issues in
+  [`docs/STANDALONE_PRODUCT_PLAN.md`](docs/STANDALONE_PRODUCT_PLAN.md).
+- The `v2.3.0` release gate is zero-config guild setup, managed cosmetic roles,
+  and live validation of durable party recovery.
 
 ## Contributing / Development Notes
 

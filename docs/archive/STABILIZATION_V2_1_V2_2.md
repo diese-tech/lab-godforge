@@ -1,4 +1,7 @@
-# Stabilization Notes
+# Historical Stabilization Notes (v2.1-v2.2)
+
+> Archived: these notes describe legacy release hardening and are not current
+> standalone GodForge product guidance.
 
 ## v2.2.0
 

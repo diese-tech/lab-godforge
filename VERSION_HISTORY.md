@@ -38,7 +38,7 @@ Released. Scope included:
 
 ## v2.2.0 - ForgeLens Handoff + Hardening
 
-Current release. Scope:
+Latest stable release. Historical scope:
 
 - **ForgeLens draft handoff contract**: stable GodForge → ForgeLens JSON export schema with `forgelens_match_id`, `game_number`, and `draft_sequence`.
 - **GodForge as orchestration bot**: economy commands (`.match`, `.bet`, `.wallet`, `.ledger`) formally deprecated; ForgeLens owns betting, wallets, ledgers, and settlement.
@@ -51,7 +51,25 @@ Current release. Scope:
 - **Dependency pinning**: `requirements.txt` pinned to discord.py 2.7.1, python-dotenv 1.2.2, aiohttp 3.13.5.
 - **Concurrent write hardening**: ledger and wallet locks upgraded to `RLock` covering full read-modify-write cycles (deprecated code; will be removed with legacy economy block).
 
+## v2.3.0 - Standalone Party Foundation
+
+Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
+
+- **Standalone product boundary**: normal GodForge workflows and help surfaces no
+  longer require or advertise a companion service.
+- **Durable party lifecycle**: explicit open, full, ready-check, forming, active,
+  completed, cancelled, and expired states.
+- **Restart recovery**: guild-scoped SQLite party records retain participants,
+  readiness, preferences, and Discord delivery references.
+- **Safe retries**: operation IDs and an audit trail make Discord interaction
+  retries idempotent and diagnosable.
+- **Optional compatibility**: the portable adapter is disabled by default and
+  cannot block core GodForge work if delivery fails.
+- **Command-page cleanup**: Discord help and the public feature/command area
+  describe only active standalone functionality.
+
 ## Future Version Gates
 
-- `v2.3`: Durable per-guild storage for settings, reports channels, and custom commands; full guild permission checks on dashboard admin actions.
+- `v2.3`: Complete zero-config guild setup and managed cosmetic roles, then
+  validate the standalone foundation in a live Discord guild.
 - `v3.0`: Full dual-use platform milestone with standalone web users and production-grade assets.
