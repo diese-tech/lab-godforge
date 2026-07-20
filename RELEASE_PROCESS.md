@@ -27,7 +27,7 @@ All gates passed. v2.1.0 shipped with the live dashboard bridge, Discord OAuth, 
 
 All gates passed. v2.2.0 shipped with the ForgeLens handoff contract, orchestration bot hardening, CSRF protection, crash fixes, and dependency pinning. See `VERSION_HISTORY.md` for full scope.
 
-## v2.3.0 Release Gate
+## v2.3.0 Release Gate — In Progress
 
 Tag `v2.3.0` only after:
 
@@ -39,6 +39,8 @@ Tag `v2.3.0` only after:
 - Optional companion compatibility remains disabled by default.
 - Version strings and release documentation agree.
 - Legacy web/API surfaces have an explicit removal or archive decision.
+- The active dashboard no longer renders economy, betting, wallet, or ledger
+  controls; retained rollback code remains inaccessible by default.
 - A live Discord smoke test confirms setup, restart recovery, and permission
   failure messaging.
 - Full local tests pass before push.

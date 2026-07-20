@@ -13,8 +13,8 @@ betting are outside GodForge's scope.
 
 ## Current Status
 
-GodForge is active and production-ish for Discord draft operations. Legacy
-economy commands are deprecated and unavailable in the standalone product.
+GodForge is an active release candidate for standalone Discord party and draft
+operations.
 
 The project also contains a local/static web dashboard and Python web API bridge. That dashboard bridge is release-candidate/staging work: it exposes useful admin surfaces, temporary password auth, staged Discord OAuth, JSON-or-SQLite dashboard storage, and local API endpoints, but full guild permission enforcement and durable production dashboard storage are still evolving.
 
@@ -25,7 +25,6 @@ Important status notes:
 - Legacy `.session` state is in memory. Local drafts persist orphan channel
   references for restart notices; the new party-lobby foundation persists full
   guild-scoped lifecycle records in SQLite.
-- Legacy ledger and wallet modules still exist for migration/testing, but they are not part of the active Discord command surface.
 - Owner and report routing are configured through environment variables, but
   per-guild self-service configuration is still planned.
 
@@ -67,8 +66,9 @@ Important status notes:
 - Development/combined API bridge under `web_api/`.
 - Combined Railway launcher in `railway_app.py` runs the Discord bot and web/API server in the same process container.
 - Public API endpoints for randomizer/build tools.
-- Protected admin endpoints still include legacy ledger/match/wallet surfaces during migration, but production mutations are guarded by `GODFORGE_ENABLE_LEGACY_ECONOMY=true`.
 - Temporary dashboard documents can use JSON or SQLite via `GODFORGE_STORAGE=sqlite`.
+- Migration-only economy routes are unsupported and documented in
+  [`docs/archive/LEGACY_ECONOMY_OPERATIONS.md`](docs/archive/LEGACY_ECONOMY_OPERATIONS.md).
 
 ### Custom Commands
 
@@ -109,7 +109,6 @@ flowchart TD
     Bot --> Activity["Optional Activity backend HTTP/WebSocket"]
     Web["web static dashboard"] --> API["web_api/server.py"]
     API --> Randomizer
-    API --> Legacy["legacy ledger/wallet surfaces"]
     API --> DashboardStore["utils.dashboard_store - JSON or SQLite"]
     Railway["railway_app.py"] --> Bot
     Railway --> API
@@ -118,13 +117,13 @@ flowchart TD
 Main data flow:
 
 1. Discord users issue dot commands.
-2. `bot.py` routes deprecated economy commands to a deprecation response and other commands through `utils.parser`.
+2. `bot.py` routes active standalone commands through `utils.parser`.
 3. Randomizer/build commands read JSON data and return embeds or text.
 4. Sessions and local drafts are held in memory by channel ID.
 5. Draft start reserves a portable `match_id` from `data/match_ids.json`.
 6. Draft end posts a portable JSON record; the optional adapter can map it for
    ForgeLens when enabled.
-7. The optional web API reuses Python modules for dashboard/admin actions, including legacy migration surfaces.
+7. The optional web API reuses Python modules for supported dashboard and admin actions.
 
 ## Commands / Usage
 
@@ -255,8 +254,6 @@ GodForge does not require a separate database for the Discord bot. Runtime state
 | File | Purpose |
 | --- | --- |
 | `data/match_ids.json` | Orchestration match ID counter |
-| `data/weekly_ledger.json` | Legacy/deprecated match ledger and bets |
-| `data/wallets.json` | Legacy/deprecated wallet balances |
 | `data/gods.json` | God roster, pools, weights |
 | `data/builds.json` | Item/build pools |
 | `data/aliases.json` | God aliases |
@@ -280,10 +277,7 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 | `ACTIVITY_API_KEY` | Activity backend only | API key sent as `X-Api-Key` to the Activity backend. |
 | `GODFORGE_PARTY_DB_PATH` | No | Standalone party-lifecycle SQLite path. Defaults to `data/godforge_party.db`. |
 | `GODFORGE_ENABLE_FORGELENS` | No | Enables optional companion export/status compatibility. Disabled by default. |
-| `BETTING_LEDGER_CHANNEL_ID` | Deprecated | Legacy betting ledger channel setting. |
-| `PLACE_BETS_CHANNEL_ID` | Deprecated | Legacy bet placement channel setting. |
 | `MATCH_DRAFT_CHANNEL_ID` | Deprecated | Legacy match draft setting. Draft orchestration uses `.draft` commands. |
-| `GODFORGE_ENABLE_LEGACY_ECONOMY` | Legacy only | Enables legacy web/API economy mutations. Leave unset in normal production. |
 | `HOST` | Web/API optional | Host binding for `web_api/server.py` or `railway_app.py`. Defaults differ between local API and Railway launcher. |
 | `PORT` | Web/API optional | Web/API port. Defaults to `8787`. |
 | `GODFORGE_ADMIN_PASSWORD` | Dashboard admin actions | Temporary password gate for protected dashboard actions. Do not use the placeholder value in production. |
@@ -310,7 +304,7 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 
 - Move environment-based guild/report routing into self-service per-guild configuration.
 - Add or finish durable per-guild storage for settings, reports channels, and custom commands.
-- Remove remaining legacy ledger/wallet internals after compatibility windows close.
+- Complete the reviewed export/removal migration for retained legacy data.
 - Review match ID generation and channel/server scoping before running one bot across unrelated leagues.
 - Persist or recover full session state across restarts (draft orphan notifications are implemented; full state recovery is not).
 - Audit Activity backend mode for retry, reconnect, and failure behavior around WebSocket draft state.
@@ -322,8 +316,8 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 - `draft_id` is GodForge-owned and stable.
 - `GODFORGE_ENABLE_FORGELENS=true` enables the optional adapter and external
   match linkage. It is disabled by default and cannot block a core workflow.
-- Legacy web economy endpoints are default-off migration surfaces documented in
-  [`docs/archive/LEGACY_WEB_DATA_CONTRACT.md`](docs/archive/LEGACY_WEB_DATA_CONTRACT.md).
+- Retained migration-only internals are catalogued in
+  [`docs/archive/LEGACY_ECONOMY_OPERATIONS.md`](docs/archive/LEGACY_ECONOMY_OPERATIONS.md).
 
 ## Roadmap
 
@@ -341,7 +335,8 @@ Read `docs/AI_WORKFLOW_GUARDRAILS.md` before AI-assisted implementation or produ
 
 Keep changes small and operationally safe:
 
-- Do not change legacy ledger or wallet internals casually; existing data may be migration state.
+- Treat archived migration data according to
+  [`docs/archive/LEGACY_ECONOMY_OPERATIONS.md`](docs/archive/LEGACY_ECONOMY_OPERATIONS.md).
 - Do not edit schema/data files without understanding migration and backup impact.
 - Add or update tests under `tests/` for command parsing, draft handoff, dashboard bridge, and concurrency behavior when touching those systems.
 - Run the focused test suite before deploying:
