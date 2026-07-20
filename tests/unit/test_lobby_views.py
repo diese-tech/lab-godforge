@@ -129,7 +129,7 @@ def test_lobby_card_is_persistent_with_stable_action_ids():
     view = LobbyCardView(AsyncMock())
 
     assert view.timeout is None
-    assert len(view.children) == 7
+    assert len(view.children) == 9
     assert [item.custom_id for item in view.children] == [
         f"{LOBBY_CARD_CUSTOM_ID_PREFIX}:{action}:v1"
         for action, _label, _style in LOBBY_CARD_ACTIONS
@@ -141,9 +141,11 @@ def test_lobby_card_is_persistent_with_stable_action_ids():
         "Cancel",
         "Share",
         "Ready Check",
-        "Launch Draft",
-    ]
-    assert [item.row for item in view.children] == [0, 0, 0, 0, 0, 1, 1]
+        "Role Fit Teams",
+        "Balanced Teams",
+        "Captain Teams",
+        ]
+    assert [item.row for item in view.children] == [0, 0, 0, 0, 0, 1, 1, 1, 1]
 
 
 @pytest.mark.asyncio

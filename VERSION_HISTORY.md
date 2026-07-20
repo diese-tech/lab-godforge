@@ -89,6 +89,10 @@ Current release candidate (`v2.3.0-rc.1`). Foundation introduced:
 - **Temporary match rooms**: ready lobbies receive private coordination and
   optional team voice rooms with organizer-scoped controls, explicit voice-move
   failures, restart reconciliation, summary archival, and grace-period cleanup.
+- **Role-complete team formation**: ready Conquest parties can launch through
+  explicit role-fit, transparent balanced, or captain-draft modes. GodForge
+  uses its own preferences and optional organizer inputs, reports unavoidable
+  fills and strength difference, and stores the explanation with the match.
 
 ## Future Version Gates
 

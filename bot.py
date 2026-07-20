@@ -64,6 +64,7 @@ from utils.match_history import (
     MatchPlayer,
     MatchTeam,
 )
+from utils.team_formation import FormationMode
 from utils import match_ids
 from utils.match_rooms import MatchRoomService, SQLiteMatchRoomRepository
 from utils.discord_match_rooms import DiscordMatchRoomOperations
@@ -2672,8 +2673,18 @@ async def _handle_lobby_card_action(
             allowed_mentions=discord.AllowedMentions(users=True, roles=False),
         )
         return
-    if action == "launch_draft":
-        await _launch_party_draft(interaction, lobby)
+    formation_actions = {
+        # Keep the v2.3-rc.1 custom ID recoverable for cards posted before this
+        # deployment; refreshed cards expose the three explicit modes.
+        "launch_draft": FormationMode.ROLE_FIT,
+        "teams_role_fit": FormationMode.ROLE_FIT,
+        "teams_balanced": FormationMode.BALANCED,
+        "teams_captains": FormationMode.CAPTAINS,
+    }
+    if action in formation_actions:
+        await _launch_party_draft(
+            interaction, lobby, formation_mode=formation_actions[action]
+        )
         return
     if action in {"edit", "cancel"} and interaction.user.id != lobby.organizer_id:
         await interaction.response.send_message(
@@ -2728,6 +2739,8 @@ async def _handle_lobby_card_action(
 async def _launch_party_draft(
     interaction: discord.Interaction,
     lobby,
+    *,
+    formation_mode: FormationMode = FormationMode.ROLE_FIT,
 ) -> None:
     """Confirm deterministic teams and launch the existing draft engine."""
     if interaction.user.id != lobby.organizer_id:
@@ -2771,6 +2784,7 @@ async def _launch_party_draft(
             operation_id=f"discord:{interaction.id}:party-draft",
             channel_id=channel.id,
             match_id_factory=match_ids.reserve_match_id,
+            formation_mode=formation_mode,
         )
         if not should_start:
             if launch.status == "active":
@@ -2836,12 +2850,32 @@ async def _launch_party_draft(
         draft_started = True
         match_record = _ensure_match_history(lobby, launch)
         _reconcile_active_party_draft(lobby, launch, interaction.user.id)
+        formation = launch.snapshot.get("formation") or {}
+        assignment_lines = []
+        for side, emoji in (("blue", "🔵"), ("red", "🔴")):
+            assignments = formation.get(side) or []
+            assignment_lines.append(
+                f"{emoji} "
+                + " · ".join(
+                    f"**{str(item['role']).title()}** <@{item['user_id']}>"
+                    for item in assignments
+                )
+            )
+        formation_summary = ""
+        if formation:
+            label = str(formation.get("mode", formation_mode.value))
+            formation_summary = (
+                f"\n\n**{label.replace('_', ' ').title()}**\n"
+                f"{formation.get('explanation', '')}\n"
+                + "\n".join(assignment_lines)
+            )
         await channel.send(
             f"⚔️ Draft `{launch.match_id}` launched from lobby `{lobby.lobby_id[:8]}`.\n"
             f"🔵 Captain <@{launch.blue.captain_id}>: "
             + " ".join(f"<@{user_id}>" for user_id in launch.blue.participant_ids)
             + f"\n🔴 Captain <@{launch.red.captain_id}>: "
-            + " ".join(f"<@{user_id}>" for user_id in launch.red.participant_ids),
+            + " ".join(f"<@{user_id}>" for user_id in launch.red.participant_ids)
+            + formation_summary,
             allowed_mentions=discord.AllowedMentions(users=True, roles=False),
         )
         await channel.send(

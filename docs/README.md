@@ -1,5 +1,8 @@
 # GodForge Documentation
 
+Team formation behavior and owned inputs are documented in
+[`TEAM_FORMATION.md`](TEAM_FORMATION.md).
+
 Use these files as the canonical sources:
 
 - [`STANDALONE_PRODUCT_PLAN.md`](STANDALONE_PRODUCT_PLAN.md) — product direction,

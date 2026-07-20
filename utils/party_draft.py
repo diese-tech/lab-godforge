@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Callable
 
 from utils.party import LobbyState, PartyLobby, utc_now
+from utils.team_formation import (
+    FormationMode,
+    FormationResult,
+    TeamFormationError,
+    form_smite_teams,
+    profiles_from_preferences,
+)
 
 
 class PartyDraftError(RuntimeError):
@@ -20,6 +27,7 @@ class PartyDraftError(RuntimeError):
 class DraftTeam:
     captain_id: int
     participant_ids: tuple[int, ...]
+    role_assignments: tuple[tuple[int, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,28 +44,46 @@ class PartyDraftLaunch:
     error: str = ""
 
 
-def form_teams(lobby: PartyLobby) -> tuple[DraftTeam, DraftTeam]:
-    """Make deterministic teams while spreading captain volunteers."""
+def form_teams(
+    lobby: PartyLobby,
+    *,
+    mode: FormationMode | str = FormationMode.ROLE_FIT,
+    organizer_inputs: dict[int, dict[str, object]] | None = None,
+) -> tuple[DraftTeam, DraftTeam]:
+    blue, red, _ = form_teams_with_result(
+        lobby, mode=mode, organizer_inputs=organizer_inputs
+    )
+    return blue, red
+
+
+def form_teams_with_result(
+    lobby: PartyLobby,
+    *,
+    mode: FormationMode | str = FormationMode.ROLE_FIT,
+    organizer_inputs: dict[int, dict[str, object]] | None = None,
+) -> tuple[DraftTeam, DraftTeam, FormationResult]:
+    """Make deterministic, role-complete teams from GodForge-owned inputs."""
     if lobby.state is not LobbyState.FORMING:
         raise PartyDraftError("the lobby must finish its ready check first")
-    if len(lobby.participants) < 2:
-        raise PartyDraftError("at least two ready participants are required")
+    try:
+        result = form_smite_teams(
+            profiles_from_preferences(
+                lobby.participants,
+                organizer_inputs=organizer_inputs,
+            ),
+            mode,
+        )
+    except TeamFormationError as exc:
+        raise PartyDraftError(str(exc)) from exc
 
-    volunteers = [p for p in lobby.participants if p.captain]
-    others = [p for p in lobby.participants if not p.captain]
-    ordered = volunteers + others
-    blue_players = ordered[::2]
-    red_players = ordered[1::2]
-    if not red_players:
-        raise PartyDraftError("both teams need at least one participant")
+    def draft_team(team):
+        return DraftTeam(
+            team.captain_id,
+            team.participant_ids,
+            tuple((assignment.user_id, assignment.role) for assignment in team.assignments),
+        )
 
-    def captain(players):
-        return next((p for p in players if p.captain), players[0])
-
-    return (
-        DraftTeam(captain(blue_players).user_id, tuple(p.user_id for p in blue_players)),
-        DraftTeam(captain(red_players).user_id, tuple(p.user_id for p in red_players)),
-    )
+    return draft_team(result.blue), draft_team(result.red), result
 
 
 class PartyDraftLaunchRepository:
@@ -102,9 +128,15 @@ class PartyDraftLaunchRepository:
         operation_id: str,
         channel_id: int,
         match_id_factory: Callable[[], str],
+        formation_mode: FormationMode | str = FormationMode.ROLE_FIT,
+        organizer_inputs: dict[int, dict[str, object]] | None = None,
     ) -> tuple[PartyDraftLaunch, bool]:
-        blue, red = form_teams(lobby)
-        snapshot = _snapshot(lobby)
+        blue, red, formation = form_teams_with_result(
+            lobby,
+            mode=formation_mode,
+            organizer_inputs=organizer_inputs,
+        )
+        snapshot = _snapshot(lobby, formation)
         with self._lock, self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
@@ -205,7 +237,9 @@ class PartyDraftLaunchRepository:
             return _decode(row)
 
 
-def _snapshot(lobby: PartyLobby) -> dict[str, object]:
+def _snapshot(
+    lobby: PartyLobby, formation: FormationResult | None = None
+) -> dict[str, object]:
     return {
         "lobby_id": lobby.lobby_id,
         "guild_id": lobby.guild_id,
@@ -229,12 +263,47 @@ def _snapshot(lobby: PartyLobby) -> dict[str, object]:
             }
             for player in lobby.participants
         ],
+        "formation": _formation_snapshot(formation) if formation else None,
+    }
+
+
+def _formation_snapshot(result: FormationResult) -> dict[str, object]:
+    return {
+        "mode": result.mode.value,
+        "first_choices": result.first_choices,
+        "second_choices": result.second_choices,
+        "fills": result.fills,
+        "strength_difference": result.strength_difference,
+        "explanation": result.explanation,
+        "draft_order": list(result.draft_order),
+        "blue": [
+            {
+                "user_id": assignment.user_id,
+                "role": assignment.role,
+                "preference": assignment.preference,
+                "strength": assignment.strength,
+            }
+            for assignment in result.blue.assignments
+        ],
+        "red": [
+            {
+                "user_id": assignment.user_id,
+                "role": assignment.role,
+                "preference": assignment.preference,
+                "strength": assignment.strength,
+            }
+            for assignment in result.red.assignments
+        ],
     }
 
 
 def _team_json(team: DraftTeam) -> str:
     return json.dumps(
-        {"captain_id": team.captain_id, "participant_ids": team.participant_ids}
+        {
+            "captain_id": team.captain_id,
+            "participant_ids": team.participant_ids,
+            "role_assignments": team.role_assignments,
+        }
     )
 
 
@@ -248,8 +317,16 @@ def _decode(row: sqlite3.Row) -> PartyDraftLaunch:
         status=row["status"],
         match_id=row["match_id"],
         channel_id=row["channel_id"],
-        blue=DraftTeam(blue["captain_id"], tuple(blue["participant_ids"])),
-        red=DraftTeam(red["captain_id"], tuple(red["participant_ids"])),
+        blue=DraftTeam(
+            blue["captain_id"],
+            tuple(blue["participant_ids"]),
+            tuple(tuple(item) for item in blue.get("role_assignments", ())),
+        ),
+        red=DraftTeam(
+            red["captain_id"],
+            tuple(red["participant_ids"]),
+            tuple(tuple(item) for item in red.get("role_assignments", ())),
+        ),
         snapshot=json.loads(row["snapshot_json"]),
         error=row["error"],
     )
