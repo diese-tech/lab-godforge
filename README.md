@@ -317,11 +317,15 @@ GODFORGE_DB_PATH=/app/data/godforge_dashboard.db
 
 ## Roadmap
 
+- See [`docs/STANDALONE_PRODUCT_PLAN.md`](docs/STANDALONE_PRODUCT_PLAN.md) for
+  the standalone GodForge product direction and phased implementation plan.
 - Stabilize the live dashboard bridge and OAuth permission checks.
 - Move single-tenant constants into guild-scoped config.
 - Add a safer durable backing store for orchestration data where JSON is too fragile.
 - Improve draft and match recovery after restarts.
-- Keep GodForge focused on live draft operations while ForgeLens owns OCR, stats, results, betting, and ledgers.
+- Add standalone party formation, lightweight results, and game-night history.
+- Keep ForgeLens as an optional disabled-by-default compatibility adapter;
+  economy and betting remain out of scope.
 
 ## Contributing / Development Notes
 
