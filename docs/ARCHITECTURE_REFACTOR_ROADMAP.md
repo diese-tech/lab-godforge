@@ -86,21 +86,32 @@ delegator.
 
 - **Depends on:** Phase 2. **Risk:** low.
 
-### Phase 5 — Party lifecycle feature(s)
+### Phase 5 — Party lifecycle feature(s) (IN PROGRESS)
 
 The largest surface: play panel, lobby cards, queue/ready-check, temporary rooms,
 party drafts, and their reconciliation/cleanup in `on_ready` and the cleanup task.
 Split into sub-phases (setup, lobby, rooms, queue) so each is a reviewable PR.
 Ready-check expiry and room reconciliation become lifecycle hooks.
 
+- **5a (DONE)** — `utils/match_room_factory.MatchRoomServiceFactory` owns per-guild
+  temporary-room service construction.
+- **Remaining:** the `/party` slash-command group, play-panel/lobby-card handlers,
+  queue/ready-check orchestration, and moving `on_ready`/cleanup-task party & room
+  reconciliation into feature lifecycle hooks (needs `LifecycleContext` to carry
+  the client). This is Discord-adapter-heavy and load-bearing for restart
+  recovery — the natural next set of focused PRs.
 - **Depends on:** Phases 1–3. **Risk:** high (restart recovery + background
   cleanup are load-bearing here).
 
-### Phase 6 — Match results, history & continuity feature
+### Phase 6 — Match results, history & continuity feature (IN PROGRESS)
 
 Move match result/continuity interaction handlers and history writes behind a
 feature module.
 
+- **6a (DONE)** — `utils/match_results` owns result-card rendering, card-identity
+  parsing, and history-record creation.
+- **Remaining:** the result/continuity button-interaction handlers (`_handle_
+  match_result_action`, `_handle_match_continuity_action`).
 - **Depends on:** Phase 5. **Risk:** medium.
 
 ### Phase 7 — Scrims & scheduled nights features
