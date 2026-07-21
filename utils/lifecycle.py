@@ -38,6 +38,7 @@ class LifecycleContext:
     get_channel: Callable[[int], object | None] = lambda channel_id: None
     get_user: Callable[[int], object | None] = lambda user_id: None
     fetch_user: Callable[[int], Awaitable[object]] | None = None
+    guilds: tuple = ()
 
 
 @runtime_checkable

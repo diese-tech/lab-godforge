@@ -77,6 +77,7 @@ from utils.activity_backend import ActivityBackendClient
 from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
 from utils.draft_coordinator import DraftCoordinator, DraftFeature
+from utils.room_lifecycle import RoomLifecycle
 from utils.draft_render import DraftRenderer
 from utils import match_results
 from utils.match_room_factory import MatchRoomServiceFactory
@@ -194,6 +195,7 @@ def _lifecycle_context() -> LifecycleContext:
         get_channel=client.get_channel,
         get_user=client.get_user,
         fetch_user=client.fetch_user,
+        guilds=tuple(client.guilds),
     )
 
 
@@ -292,18 +294,6 @@ async def on_ready():
         log.info("Recovered %s active party lobby record(s)", len(recoverable_lobbies))
 
     await feature_registry.run_startup(_lifecycle_context())
-    for guild in client.guilds:
-        guild_rooms = tuple(
-            match_room_repository.active(guild.id)
-        )
-        if not guild_rooms:
-            continue
-        try:
-            room_service = _match_room_service_for_guild(guild)
-            for rooms in guild_rooms:
-                await room_service.reconcile(rooms.lobby_id)
-        except Exception:
-            log.exception("Temporary-room reconciliation failed for guild %s", guild.id)
 
 
 @tasks.loop(minutes=5)
@@ -321,24 +311,6 @@ async def cleanup_task():
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
 
     await feature_registry.run_cleanup(_lifecycle_context())
-
-    for guild in client.guilds:
-        guild_rooms = tuple(
-            match_room_repository.active(guild.id)
-        )
-        if not guild_rooms:
-            continue
-        try:
-            room_service = _match_room_service_for_guild(guild)
-            for rooms in guild_rooms:
-                lobby = party_repository.get(guild.id, rooms.lobby_id)
-                if lobby and lobby.is_terminal:
-                    await room_service.close(
-                        rooms.lobby_id, reason=f"lobby {lobby.state.value}"
-                    )
-            await room_service.cleanup_due()
-        except Exception:
-            log.exception("Temporary-room cleanup failed for guild %s", guild.id)
 
     for event, minutes, occurrence in schedule_repository.claim_due_reminders():
         recipients = {event.organizer_id, *(rsvp.user_id for rsvp in event.rsvps)}
@@ -1522,6 +1494,11 @@ match_room_service_factory = MatchRoomServiceFactory(
 
 def _match_room_service_for_guild(guild: discord.Guild) -> MatchRoomService:
     return match_room_service_factory.for_guild(guild)
+
+
+feature_registry.register(
+    RoomLifecycle(match_room_repository, party_repository, match_room_service_factory)
+)
 
 
 # /party setup is owned by the party-setup-command feature module (Issue #48);
