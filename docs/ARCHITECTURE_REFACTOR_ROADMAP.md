@@ -95,11 +95,18 @@ Ready-check expiry and room reconciliation become lifecycle hooks.
 
 - **5a (DONE)** — `utils/match_room_factory.MatchRoomServiceFactory` owns per-guild
   temporary-room service construction.
-- **Remaining:** the `/party` slash-command group, play-panel/lobby-card handlers,
-  queue/ready-check orchestration, and moving `on_ready`/cleanup-task party & room
-  reconciliation into feature lifecycle hooks (needs `LifecycleContext` to carry
-  the client). This is Discord-adapter-heavy and load-bearing for restart
-  recovery — the natural next set of focused PRs.
+- **5b (DONE)** — `utils/party_room_command.py` owns `/party room`, built behind
+  characterization tests (`tests/unit/test_party_room_command_characterization.py`).
+- **5c (DONE)** — `utils/party_setup_command.py` owns `/party setup`, its Discord
+  operations adapter, the Play-panel embed, and room-category provisioning, built
+  behind characterization tests
+  (`tests/unit/test_party_setup_command_characterization.py`).
+- **Remaining (5d):** the play panel action handler, lobby-card handler,
+  `_ensure_party_queue`, the ready-check embed/handler, and `_launch_party_draft`
+  — the core lobby/queue/ready-check/draft-launch orchestration, and moving
+  `on_ready`/cleanup-task party & room reconciliation into feature lifecycle
+  hooks. This is the single largest and most restart-recovery-critical remaining
+  surface.
 - **Depends on:** Phases 1–3. **Risk:** high (restart recovery + background
   cleanup are load-bearing here).
 
