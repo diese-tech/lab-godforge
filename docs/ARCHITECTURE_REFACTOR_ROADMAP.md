@@ -103,22 +103,29 @@ Ready-check expiry and room reconciliation become lifecycle hooks.
 - **Depends on:** Phases 1–3. **Risk:** high (restart recovery + background
   cleanup are load-bearing here).
 
-### Phase 6 — Match results, history & continuity feature (IN PROGRESS)
+### Phase 6 — Match results, history & continuity feature (DONE)
 
-Move match result/continuity interaction handlers and history writes behind a
-feature module.
-
-- **6a (DONE)** — `utils/match_results` owns result-card rendering, card-identity
+- **6a** — `utils/match_results` owns result-card rendering, card-identity
   parsing, and history-record creation.
-- **Remaining:** the result/continuity button-interaction handlers (`_handle_
-  match_result_action`, `_handle_match_continuity_action`).
+- **6b** — `utils/match_actions.py` owns the result/continuity button-interaction
+  handlers, built behind characterization tests
+  (`tests/unit/test_match_actions_characterization.py`) since this surface had no
+  prior direct coverage. Room reconciliation and next-match posting are
+  coordinated via an injected `MatchActionDeps`.
 - **Depends on:** Phase 5. **Risk:** medium.
 
-### Phase 7 — Scrims & scheduled nights features
+### Phase 7 — Scrims & scheduled nights features (PARTIAL)
 
 Move scrim challenge/lock/launch and scheduled-night handlers plus their reminder
 cleanup behind feature modules with lifecycle hooks.
 
+- **7a (DONE)** — `utils/scrim_commands.py` owns the full `/scrim` command group
+  and `ScrimChallengeView`, built behind characterization tests
+  (`tests/unit/test_scrim_commands_characterization.py`).
+- **Remaining:** the `/party schedule`/`confirm`/`rsvp`/`unrsvp`/`events`/
+  `calendar`/`open-scheduled` scheduled-night commands and their reminder
+  cleanup (still inline in `bot.py`; scheduling domain logic already lives in
+  `utils/party_schedule.py`).
 - **Depends on:** Phases 5–6. **Risk:** medium.
 
 ### Phase 8 — Shared infrastructure hardening & bot.py reduction
