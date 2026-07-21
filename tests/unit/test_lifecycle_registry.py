@@ -72,6 +72,24 @@ def test_registry_exposes_registered_features():
     assert reg.features == (f,)
 
 
+def test_context_extra_lookups_default_to_none():
+    ctx = LifecycleContext(get_guild=lambda gid: None)
+    assert ctx.get_channel(1) is None
+    assert ctx.get_user(1) is None
+    assert ctx.fetch_user is None
+
+
+def test_context_accepts_all_lookups():
+    ctx = LifecycleContext(
+        get_guild=lambda gid: "guild",
+        get_channel=lambda cid: "channel",
+        get_user=lambda uid: "user",
+        fetch_user=AsyncMock(return_value="fetched"),
+    )
+    assert ctx.get_channel(1) == "channel"
+    assert ctx.get_user(1) == "user"
+
+
 def test_r67_feature_satisfies_protocol(tmp_path):
     service = R67Service(SQLiteR67Repository(tmp_path / "r67.db"))
     feature = R67Feature(service)

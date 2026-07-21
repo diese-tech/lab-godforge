@@ -189,7 +189,12 @@ feature_registry.register(R67Feature(r67_service))
 
 
 def _lifecycle_context() -> LifecycleContext:
-    return LifecycleContext(get_guild=client.get_guild)
+    return LifecycleContext(
+        get_guild=client.get_guild,
+        get_channel=client.get_channel,
+        get_user=client.get_user,
+        fetch_user=client.fetch_user,
+    )
 
 
 # Shared dot-command routing seam (Issue #48). Features register the exact
