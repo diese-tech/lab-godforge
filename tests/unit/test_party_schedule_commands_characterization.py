@@ -30,6 +30,9 @@ def schedule_repos(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "schedule_repository", schedule)
     monkeypatch.setattr(bot, "party_repository", party)
     monkeypatch.setattr(bot, "party_queue_service", queue_service)
+    monkeypatch.setattr(bot._schedule_deps, "schedule_repository", schedule)
+    monkeypatch.setattr(bot._schedule_deps, "party_repository", party)
+    monkeypatch.setattr(bot._schedule_deps, "party_queue_service", queue_service)
     return schedule, party, queue_service
 
 

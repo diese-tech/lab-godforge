@@ -85,6 +85,7 @@ from utils.match_actions import (
     handle_match_continuity_action,
     handle_match_result_action,
 )
+from utils.schedule_commands import ScheduleCommandDeps, register_schedule_commands
 from utils.scrim_commands import ScrimCommandDeps, register_scrim_commands
 from utils.session_commands import SessionCommandHandler
 from utils.lifecycle import FeatureRegistry, LifecycleContext
@@ -1876,186 +1877,25 @@ async def party_room(
     )
 
 
-@party_commands.command(
-    name="schedule",
-    description="Schedule a one-time or weekly SMITE custom night",
+# Scheduled-night /party subcommands are owned by the schedule feature module
+# (Issue #48); bot.py wires it with injected dependencies.
+_schedule_deps = ScheduleCommandDeps(
+    schedule_repository=schedule_repository,
+    party_repository=party_repository,
+    party_queue_service=party_queue_service,
+    ready_check_embed=lambda lobby_id, queue: _ready_check_embed(lobby_id, queue),
+    ready_check_view=lambda: ReadyCheckView(_handle_ready_check_action),
+    lobby_card_embed=lambda lobby: _lobby_card_embed(lobby),
+    lobby_card_view=lambda: LobbyCardView(_handle_lobby_card_action),
 )
-@app_commands.describe(
-    title="A short name for the custom night",
-    when="For example: Friday 8 PM or 2026-08-01 20:00",
-    timezone_name="IANA timezone, for example America/New_York",
-    recurrence="once or weekly",
-    capacity="Number of active seats (2-20)",
-    role_slots="Optional comma-separated roles",
-    reminders="Comma-separated minutes before start, for example 60,15",
-)
-async def party_schedule(
-    interaction: discord.Interaction,
-    title: str,
-    when: str,
-    timezone_name: str,
-    recurrence: str = "once",
-    capacity: app_commands.Range[int, 2, 20] = 10,
-    role_slots: str = "",
-    reminders: str = "60,15",
-):
-    if interaction.guild_id is None:
-        await interaction.response.send_message("Server-only command.", ephemeral=True)
-        return
-    try:
-        starts_at = parse_local_start(when, timezone_name)
-        recurrence_value = Recurrence(recurrence.strip().lower())
-        reminder_values = tuple(
-            int(value.strip()) for value in reminders.split(",") if value.strip()
-        )
-        if not reminder_values or any(value < 5 or value > 10080 for value in reminder_values):
-            raise ScheduleError("reminders must be 5-10080 minutes before start")
-        event = schedule_repository.create(
-            guild_id=interaction.guild_id,
-            organizer_id=interaction.user.id,
-            title=title,
-            starts_at=starts_at,
-            timezone_name=timezone_name,
-            recurrence=recurrence_value,
-            capacity=capacity,
-            role_slots=tuple(role_slots.split(",")),
-            reminder_minutes=reminder_values,
-            operation_id=f"discord:{interaction.id}:schedule",
-        )
-    except (ScheduleError, ValueError) as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message(
-        f"Confirm **{event.title}** at <t:{int(event.starts_at.timestamp())}:f>, "
-        f"interpreted in `{event.timezone_name}`. "
-        f"Run `/party confirm {event.event_id}` to publish it.",
-        ephemeral=True,
-    )
-
-
-@party_commands.command(name="confirm", description="Confirm a scheduled night's timezone")
-async def party_confirm(interaction: discord.Interaction, event_id: str):
-    try:
-        event = schedule_repository.confirm(event_id, interaction.user.id)
-    except ScheduleError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message(
-        f"Scheduled **{event.title}** for <t:{int(event.starts_at.timestamp())}:f>. "
-        f"RSVP with `/party rsvp {event.event_id}`."
-    )
-
-
-@party_commands.command(name="rsvp", description="Reserve a seat in a scheduled custom night")
-async def party_rsvp(interaction: discord.Interaction, event_id: str):
-    if interaction.guild_id is None:
-        await interaction.response.send_message("Server-only command.", ephemeral=True)
-        return
-    scheduled = schedule_repository.get(event_id)
-    if scheduled is None or scheduled.guild_id != interaction.guild_id:
-        await interaction.response.send_message("Scheduled night not found.", ephemeral=True)
-        return
-    profile = party_repository.get_player_preferences(
-        interaction.guild_id, interaction.user.id
-    )
-    try:
-        event = schedule_repository.rsvp(event_id, interaction.user.id, profile)
-    except ScheduleError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    waitlisted = any(item.user_id == interaction.user.id for item in event.waitlist)
-    await interaction.response.send_message(
-        (
-            f"You're on the waitlist at position "
-            f"{next(i for i, item in enumerate(event.waitlist, 1) if item.user_id == interaction.user.id)}."
-            if waitlisted
-            else f"Seat reserved ({len(event.rsvps)}/{event.capacity})."
-        ),
-        ephemeral=True,
-    )
-
-
-@party_commands.command(name="unrsvp", description="Release a scheduled-night reservation")
-async def party_unrsvp(interaction: discord.Interaction, event_id: str):
-    event = schedule_repository.get(event_id)
-    if event is None or event.guild_id != interaction.guild_id:
-        await interaction.response.send_message("Scheduled night not found.", ephemeral=True)
-        return
-    try:
-        schedule_repository.cancel_rsvp(event_id, interaction.user.id)
-    except ScheduleError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message("Reservation released.", ephemeral=True)
-
-
-@party_commands.command(name="events", description="List upcoming SMITE custom nights")
-async def party_events(interaction: discord.Interaction):
-    if interaction.guild_id is None:
-        await interaction.response.send_message("Server-only command.", ephemeral=True)
-        return
-    events = schedule_repository.list_upcoming(interaction.guild_id)
-    if not events:
-        await interaction.response.send_message("No custom nights are scheduled.", ephemeral=True)
-        return
-    await interaction.response.send_message(
-        "\n".join(
-            f"`{event.event_id}` **{event.title}** — "
-            f"<t:{int(event.starts_at.timestamp())}:f> — "
-            f"{len(event.rsvps)}/{event.capacity} RSVP"
-            for event in events
-        ),
-        ephemeral=True,
-    )
-
-
-@party_commands.command(name="calendar", description="Download a scheduled night as an ICS file")
-async def party_calendar(interaction: discord.Interaction, event_id: str):
-    event = schedule_repository.get(event_id)
-    if event is None or event.guild_id != interaction.guild_id:
-        await interaction.response.send_message("Scheduled night not found.", ephemeral=True)
-        return
-    await interaction.response.send_message(
-        file=discord.File(io.BytesIO(calendar_ics(event)), filename=f"godforge-{event.event_id}.ics"),
-        ephemeral=True,
-    )
-
-
-@party_commands.command(
-    name="open-scheduled",
-    description="Convert a scheduled night into its live ready-check lobby",
-)
-async def party_open_scheduled(interaction: discord.Interaction, event_id: str):
-    event = schedule_repository.get(event_id)
-    if event is None or event.guild_id != interaction.guild_id:
-        await interaction.response.send_message("Scheduled night not found.", ephemeral=True)
-        return
-    if event.organizer_id != interaction.user.id:
-        await interaction.response.send_message(
-            "Only the organizer can open this lobby.", ephemeral=True
-        )
-        return
-    try:
-        lobby = await convert_to_lobby(
-            event, schedule_repository, party_repository, party_queue_service
-        )
-    except (ScheduleError, ValueError, QueueError) as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    queue = await party_queue_service.get(lobby.lobby_id)
-    if lobby.state is LobbyState.READY_CHECK and queue is not None:
-        await interaction.response.send_message(
-            content=" ".join(f"<@{member.user_id}>" for member in queue.active),
-            embed=_ready_check_embed(lobby.lobby_id, queue),
-            view=ReadyCheckView(_handle_ready_check_action),
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
-        )
-    else:
-        await interaction.response.send_message(
-            content=f"**{event.title}** is now an ordinary GodForge lobby.",
-            embed=_lobby_card_embed(lobby),
-            view=LobbyCardView(_handle_lobby_card_action),
-        )
+register_schedule_commands(party_commands, _schedule_deps)
+party_schedule = party_commands.schedule
+party_confirm = party_commands.confirm
+party_rsvp = party_commands.rsvp
+party_unrsvp = party_commands.unrsvp
+party_events = party_commands.events
+party_calendar = party_commands.calendar
+party_open_scheduled = party_commands.open_scheduled
 
 
 async def _handle_play_panel_action(
