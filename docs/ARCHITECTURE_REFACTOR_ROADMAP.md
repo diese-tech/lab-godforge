@@ -143,24 +143,45 @@ Ready-check expiry and room reconciliation become lifecycle hooks.
   could become a schedule-feature lifecycle hook in a future pass.
 - **Depends on:** Phases 5–6. **Risk:** medium.
 
-### Phase 8 — Shared infrastructure hardening & bot.py reduction (STATUS)
+### Phase 8 — Shared infrastructure hardening & bot.py reduction (DONE, with one flagged exception)
 
-`bot.py` fell from 3,855 lines (session start) to ~1,760 after Phases 1–7 —
-composition, wiring, registration, and shared orchestration are now the
-overwhelming majority of what remains. What's left before this phase is fully
-done:
+`bot.py` fell from 3,855 lines (session start) to 1,647 — composition, wiring,
+registration, and shared orchestration are now the overwhelming majority of
+what remains.
 
-- Move `on_ready`/cleanup-task party-lobby and temporary-room reconciliation
-  into feature lifecycle hooks registered through `FeatureRegistry` (currently
-  inline in `bot.py`, calling into the now-extracted services directly).
-- Extract remaining small cross-cutting pieces still in `bot.py`: session
-  reaction/claim reaction dispatch glue, `_handle_role_preference`, the
-  deprecated-economy notice body, and legacy `.match`/`.bet`/`.wallet`/`.ledger`
-  handlers (`_handle_match_command`, `_handle_bet_command`, etc. — currently
-  large but rarely touched; low priority since they only print a deprecation
-  notice).
-- Confirm no feature business logic remains directly in `bot.py` once the above
-  land.
+- **8a** — `LifecycleContext` extended with `get_channel`, `get_user`,
+  `fetch_user`, and `guilds` (all defaulting to no-ops/empty so existing
+  constructions keep working), the prerequisite for moving reconciliation out
+  of inline `on_ready`/cleanup-task loops.
+- **8b** — `DraftCoordinator.notify_orphaned_drafts` + `DraftFeature`: the
+  restart draft-loss notice is now a startup lifecycle hook.
+- **8c** — `utils/room_lifecycle.RoomLifecycle`: temporary-room reconciliation
+  (startup) and terminal-lobby close + `cleanup_due()` (cleanup) are now
+  lifecycle hooks instead of inline per-guild loops.
+- **8d** — `utils/schedule_lifecycle.ScheduleLifecycle`: scheduled-night
+  reminder DM delivery is now a cleanup lifecycle hook.
+- **8e** — `PartyLobbyService.expire_ready_checks` + `PartyLobbyFeature`:
+  ready-check timeout/cancellation is now a cleanup lifecycle hook.
+- **8f** — `PartyLobbyService.handle_role_preference`: the Play-panel
+  self-service managed-role toggle moved out of `bot.py`.
+
+`on_ready` and `cleanup_task` are now: task-manager housekeeping (session/local
+-draft in-memory expiry) plus one `feature_registry.run_startup`/`run_cleanup`
+call each — every feature's recovery/cleanup is registered, not inlined.
+
+**Flagged exception, not resolved:** `bot.py` still contains ~650 lines of
+`.match`/`.bet`/`.wallet`/`.ledger` handler bodies (`_handle_wallet_command`,
+`_handle_ledger_command`, `_handle_match_command`, `_handle_bet_command`, and
+everything they call — wallet/ledger embeds, betting views, etc.). These are
+**confirmed dead code**: `on_message` already intercepts those four tokens and
+routes them to `_handle_deprecated_economy_command` (a deprecation notice)
+before any of this runs. Several existing tests
+(`tests/simulations/test_admin_commands.py`, `tests/unit/test_ledger_posting.py`,
+others) invoke these dead functions directly, bypassing the real routing.
+Deleting this block is a legitimate simplification but is a different kind of
+action than the extractions in this refactor — it removes code and breaks
+existing tests rather than moving live behavior into a module — so it was
+intentionally left for an explicit decision rather than done unprompted.
 
 - **Depends on:** all prior. **Risk:** low–medium (mechanical).
 
