@@ -36,10 +36,13 @@ def party_repos(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "party_draft_repository", party_draft)
     monkeypatch.setattr(bot, "match_history_repository", match_history)
     monkeypatch.setattr(bot, "scrim_repository", scrims)
-    monkeypatch.setattr(bot, "_match_action_deps", bot._match_action_deps)
     monkeypatch.setattr(bot._match_action_deps, "match_history_repository", match_history)
     monkeypatch.setattr(bot._match_action_deps, "party_draft_repository", party_draft)
     monkeypatch.setattr(bot._match_action_deps, "party_queue_service", queue_service)
+    monkeypatch.setattr(bot._party_lobby_deps, "party_repository", party)
+    monkeypatch.setattr(bot._party_lobby_deps, "party_queue_service", queue_service)
+    monkeypatch.setattr(bot._party_lobby_deps, "party_draft_repository", party_draft)
+    monkeypatch.setattr(bot._party_lobby_deps, "scrim_repository", scrims)
     return party, queue_service, party_draft, match_history, scrims
 
 
@@ -220,6 +223,9 @@ async def test_ready_check_all_ready_transitions_to_forming(party_repos, monkeyp
         return_value=MagicMock(text_room_id=555, team_voice_ids=())
     )
     monkeypatch.setattr(bot, "_match_room_service_for_guild", lambda guild: room_service)
+    monkeypatch.setattr(
+        bot._party_lobby_deps, "match_room_service_for_guild", lambda guild: room_service
+    )
 
     guild = _guild(1)
     interaction1 = _interaction(
@@ -298,7 +304,8 @@ async def test_launch_party_draft_local_success(party_repos, monkeypatch):
 
     drafts = DraftManager()
     monkeypatch.setattr(bot, "drafts", drafts)
-    monkeypatch.setattr(bot, "ACTIVITY_BACKEND_URL", "")
+    monkeypatch.setattr(bot._party_lobby_deps, "drafts", drafts)
+    monkeypatch.setattr(bot.activity_client, "base_url", "")
 
     guild = _guild(1, members=members)
     interaction = _interaction(user_id=1, guild=guild)
