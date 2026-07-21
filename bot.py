@@ -1921,9 +1921,9 @@ async def party_schedule(
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
     await interaction.response.send_message(
-        f"Confirm **{event.title}** at <t:{int(event.starts_at.timestamp())}:D> "
-        f"(<t:{int(event.starts_at.timestamp())}:R>), interpreted in "
-        f"`{event.timezone_name}`. Run `/party confirm {event.event_id}` to publish it.",
+        f"Confirm **{event.title}** at <t:{int(event.starts_at.timestamp())}:f>, "
+        f"interpreted in `{event.timezone_name}`. "
+        f"Run `/party confirm {event.event_id}` to publish it.",
         ephemeral=True,
     )
 
@@ -1936,8 +1936,7 @@ async def party_confirm(interaction: discord.Interaction, event_id: str):
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
     await interaction.response.send_message(
-        f"Scheduled **{event.title}** for <t:{int(event.starts_at.timestamp())}:D> "
-        f"(<t:{int(event.starts_at.timestamp())}:R>). "
+        f"Scheduled **{event.title}** for <t:{int(event.starts_at.timestamp())}:f>. "
         f"RSVP with `/party rsvp {event.event_id}`."
     )
 
@@ -1997,8 +1996,7 @@ async def party_events(interaction: discord.Interaction):
     await interaction.response.send_message(
         "\n".join(
             f"`{event.event_id}` **{event.title}** — "
-            f"<t:{int(event.starts_at.timestamp())}:D> "
-            f"(<t:{int(event.starts_at.timestamp())}:R>) — "
+            f"<t:{int(event.starts_at.timestamp())}:f> — "
             f"{len(event.rsvps)}/{event.capacity} RSVP"
             for event in events
         ),

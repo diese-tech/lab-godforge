@@ -246,8 +246,7 @@ def register_scrim_commands(
             title="Scrim challenge",
             description=(
                 f"<@{opponent.captain_id}>, your team has been challenged for "
-                f"<t:{int(result.starts_at.timestamp())}:D> "
-                f"(<t:{int(result.starts_at.timestamp())}:R>).\n"
+                f"<t:{int(result.starts_at.timestamp())}:f>.\n"
                 "Accept or reject below, or use `/scrim respond` to propose another time."
             ),
             color=discord.Color.blurple(),
@@ -291,8 +290,7 @@ def register_scrim_commands(
             return
         await interaction.response.send_message(
             f"Challenge `{result.challenge_id}` is **{result.state.value}** at "
-            f"<t:{int(result.starts_at.timestamp())}:D> "
-            f"(<t:{int(result.starts_at.timestamp())}:R>)."
+            f"<t:{int(result.starts_at.timestamp())}:f>."
         )
 
     @scrim_commands.command(
