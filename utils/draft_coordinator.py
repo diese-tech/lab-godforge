@@ -27,6 +27,7 @@ import discord
 
 from utils import draft_support
 from utils.forgelens_adapter import forgelens_enabled
+from utils.lifecycle import LifecycleContext
 
 
 class DraftCoordinator:
@@ -80,6 +81,32 @@ class DraftCoordinator:
         task = self.ws_tasks.pop(channel_id, None)
         if task:
             task.cancel()
+
+    async def notify_orphaned_drafts(self, get_channel) -> int:
+        """Tell channels whose local draft was dropped by a restart, then clear the pointer.
+
+        Local draft *state* is in-memory and does not survive a restart; the
+        restart-pointer file is the only record of which channels had one
+        active. Returns the number of channels notified.
+        """
+        orphaned = self._active_store.load()
+        if not orphaned:
+            return 0
+        self._active_store.clear()
+        notified = 0
+        for channel_id_str in orphaned:
+            channel = get_channel(int(channel_id_str))
+            if channel is None:
+                continue
+            try:
+                await channel.send(
+                    "⚠️ GodForge restarted — the active draft was lost. "
+                    "Please start a new one with `.draft start`."
+                )
+                notified += 1
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        return notified
 
     def register_activity_draft(
         self, channel_id: int, match_id: str, snapshot: dict
@@ -656,3 +683,19 @@ class DraftCoordinator:
                         draft.draft_id,
                         draft.current_game.game_number,
                     )
+
+
+class DraftFeature:
+    """Registers local-draft restart notification with the shared registry."""
+
+    name = "draft"
+
+    def __init__(self, coordinator: DraftCoordinator) -> None:
+        self.coordinator = coordinator
+
+    async def on_startup(self, ctx: LifecycleContext) -> None:
+        notified = await self.coordinator.notify_orphaned_drafts(ctx.get_channel)
+        if notified:
+            self.coordinator._log.info(
+                "Notified %s channel(s) of lost draft(s) after restart", notified
+            )

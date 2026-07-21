@@ -76,7 +76,7 @@ from utils.scrims import (
 from utils.activity_backend import ActivityBackendClient
 from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
-from utils.draft_coordinator import DraftCoordinator
+from utils.draft_coordinator import DraftCoordinator, DraftFeature
 from utils.draft_render import DraftRenderer
 from utils import match_results
 from utils.match_room_factory import MatchRoomServiceFactory
@@ -206,11 +206,6 @@ _tracked_messages = {}
 
 # Durable local-draft restart pointer is owned by ActiveDraftStore (Issue #48).
 active_draft_store = ActiveDraftStore()
-_ACTIVE_DRAFTS_FILE = active_draft_store.path
-
-
-def _load_active_drafts() -> dict:
-    return active_draft_store.load()
 
 
 def _save_active_draft(channel_id: int, draft_id: str):
@@ -309,24 +304,6 @@ async def on_ready():
                 await room_service.reconcile(rooms.lobby_id)
         except Exception:
             log.exception("Temporary-room reconciliation failed for guild %s", guild.id)
-
-    orphaned = _load_active_drafts()
-    if orphaned:
-        try:
-            os.remove(_ACTIVE_DRAFTS_FILE)
-        except OSError:
-            pass
-        for channel_id_str in orphaned:
-            ch = client.get_channel(int(channel_id_str))
-            if ch:
-                try:
-                    await ch.send(
-                        "⚠️ GodForge restarted — the active draft was lost. "
-                        "Please start a new one with `.draft start`."
-                    )
-                except (discord.Forbidden, discord.HTTPException):
-                    pass
-        log.info(f"Notified {len(orphaned)} channel(s) of lost draft(s) after restart")
 
 
 @tasks.loop(minutes=5)
@@ -610,6 +587,7 @@ draft_coordinator = DraftCoordinator(
     channel_has_active=_channel_has_active,
     log=log,
 )
+feature_registry.register(DraftFeature(draft_coordinator))
 
 
 # ── Reaction handler ──────────────────────────────────────────────────────────

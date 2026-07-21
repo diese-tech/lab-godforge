@@ -4,11 +4,13 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from utils.active_drafts import ActiveDraftStore
 from utils.draft import DraftManager
-from utils.draft_coordinator import DraftCoordinator
+from utils.draft_coordinator import DraftCoordinator, DraftFeature
+from utils.lifecycle import LifecycleContext
 
 
-def _coord(*, activity_enabled=False, drafts=None):
+def _coord(*, activity_enabled=False, drafts=None, active_draft_store=None):
     formatter = MagicMock()
     formatter.format_error.side_effect = lambda m: f"ERR:{m}"
     activity = MagicMock()
@@ -18,7 +20,7 @@ def _coord(*, activity_enabled=False, drafts=None):
         drafts=drafts if drafts is not None else DraftManager(),
         activity_client=activity,
         renderer=MagicMock(),
-        active_draft_store=MagicMock(),
+        active_draft_store=active_draft_store if active_draft_store is not None else MagicMock(),
         tracked_messages={},
         formatter=formatter,
         resolve_god_name=lambda g: (g, None),
@@ -107,3 +109,58 @@ async def test_local_start_success_saves_restart_pointer():
     assert result is None
     coord._active_store.save.assert_called_once()
     assert coord._drafts.get(10) is not None
+
+
+# -- Restart-notice lifecycle hook ---------------------------------------
+
+async def test_notify_orphaned_drafts_notifies_and_clears(tmp_path):
+    store = ActiveDraftStore(str(tmp_path / "active.json"))
+    store.save(111, "draft-a")
+    store.save(222, "draft-b")
+    coord = _coord(active_draft_store=store)
+
+    channel = MagicMock()
+    channel.send = AsyncMock()
+    channels = {111: channel, 222: channel}
+
+    notified = await coord.notify_orphaned_drafts(lambda cid: channels.get(cid))
+
+    assert notified == 2
+    assert channel.send.await_count == 2
+    assert store.load() == {}
+
+
+async def test_notify_orphaned_drafts_skips_missing_channels(tmp_path):
+    store = ActiveDraftStore(str(tmp_path / "active.json"))
+    store.save(111, "draft-a")
+    coord = _coord(active_draft_store=store)
+
+    notified = await coord.notify_orphaned_drafts(lambda cid: None)
+
+    assert notified == 0
+    assert store.load() == {}
+
+
+async def test_notify_orphaned_drafts_noop_when_empty(tmp_path):
+    store = ActiveDraftStore(str(tmp_path / "active.json"))
+    coord = _coord(active_draft_store=store)
+
+    notified = await coord.notify_orphaned_drafts(lambda cid: None)
+
+    assert notified == 0
+
+
+async def test_draft_feature_on_startup_calls_coordinator(tmp_path):
+    store = ActiveDraftStore(str(tmp_path / "active.json"))
+    store.save(111, "draft-a")
+    coord = _coord(active_draft_store=store)
+    channel = MagicMock()
+    channel.send = AsyncMock()
+
+    feature = DraftFeature(coord)
+    assert feature.name == "draft"
+    ctx = LifecycleContext(get_guild=lambda gid: None, get_channel=lambda cid: channel)
+    await feature.on_startup(ctx)
+
+    channel.send.assert_awaited_once()
+    assert store.load() == {}

@@ -38,3 +38,9 @@ class ActiveDraftStore:
             data.pop(str(channel_id))
             with open(self.path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
+
+    def clear(self) -> None:
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
