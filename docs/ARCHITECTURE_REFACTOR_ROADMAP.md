@@ -86,7 +86,7 @@ delegator.
 
 - **Depends on:** Phase 2. **Risk:** low.
 
-### Phase 5 — Party lifecycle feature(s) (IN PROGRESS)
+### Phase 5 — Party lifecycle feature(s) (DONE)
 
 The largest surface: play panel, lobby cards, queue/ready-check, temporary rooms,
 party drafts, and their reconciliation/cleanup in `on_ready` and the cleanup task.
@@ -101,12 +101,19 @@ Ready-check expiry and room reconciliation become lifecycle hooks.
   operations adapter, the Play-panel embed, and room-category provisioning, built
   behind characterization tests
   (`tests/unit/test_party_setup_command_characterization.py`).
-- **Remaining (5d):** the play panel action handler, lobby-card handler,
-  `_ensure_party_queue`, the ready-check embed/handler, and `_launch_party_draft`
-  — the core lobby/queue/ready-check/draft-launch orchestration, and moving
-  `on_ready`/cleanup-task party & room reconciliation into feature lifecycle
-  hooks. This is the single largest and most restart-recovery-critical remaining
-  surface.
+- **5d (DONE)** — `utils/party_lobby.PartyLobbyService` owns the play-panel
+  action handler, lobby creation/join flows, the queue-bootstrap helper, the
+  lobby-card handler, the ready-check handler, and launching the draft engine
+  (local or activity backend), built behind characterization tests
+  (`tests/unit/test_party_lobby_characterization.py`). This was the single
+  largest and most tightly-coupled surface in the whole codebase; the service
+  makes its existing coupling explicit via one injected `PartyLobbyDeps` rather
+  than pretending to fully decouple it in one pass — see "Known remaining
+  coupling" below.
+- **Remaining polish:** moving `on_ready`/cleanup-task party & room
+  reconciliation into feature lifecycle hooks (needs `LifecycleContext` to carry
+  the client) is still open; it is lower-risk than 5d and can land as a small
+  follow-up.
 - **Depends on:** Phases 1–3. **Risk:** high (restart recovery + background
   cleanup are load-bearing here).
 
@@ -136,13 +143,52 @@ Ready-check expiry and room reconciliation become lifecycle hooks.
   could become a schedule-feature lifecycle hook in a future pass.
 - **Depends on:** Phases 5–6. **Risk:** medium.
 
-### Phase 8 — Shared infrastructure hardening & bot.py reduction
+### Phase 8 — Shared infrastructure hardening & bot.py reduction (STATUS)
 
-Extract remaining cross-cutting helpers (permission checks, guild-settings access,
-match-room service factory) into shared infrastructure, and confirm `bot.py`
-contains only composition, wiring, registration, and shared orchestration.
+`bot.py` fell from 3,855 lines (session start) to ~1,760 after Phases 1–7 —
+composition, wiring, registration, and shared orchestration are now the
+overwhelming majority of what remains. What's left before this phase is fully
+done:
+
+- Move `on_ready`/cleanup-task party-lobby and temporary-room reconciliation
+  into feature lifecycle hooks registered through `FeatureRegistry` (currently
+  inline in `bot.py`, calling into the now-extracted services directly).
+- Extract remaining small cross-cutting pieces still in `bot.py`: session
+  reaction/claim reaction dispatch glue, `_handle_role_preference`, the
+  deprecated-economy notice body, and legacy `.match`/`.bet`/`.wallet`/`.ledger`
+  handlers (`_handle_match_command`, `_handle_bet_command`, etc. — currently
+  large but rarely touched; low priority since they only print a deprecation
+  notice).
+- Confirm no feature business logic remains directly in `bot.py` once the above
+  land.
 
 - **Depends on:** all prior. **Risk:** low–medium (mechanical).
+
+## Known remaining coupling (honest scope note)
+
+Two things are true at once:
+
+1. Every feature extracted in Phases 1–7 (and the reference `.r67` feature) has
+   its Discord adapter, service, repository, and tests in its own module, with
+   collaborators explicitly injected — the target pattern from
+   `FEATURE_ARCHITECTURE.md` is fully realized for those.
+2. `PartyLobbyService` (Phase 5d) makes the party lobby/queue/ready-check/
+   draft-launch surface's *existing* coupling explicit and testable, but does
+   not reduce it. It is one class with ~20 injected collaborators because that
+   coupling was already there in `bot.py` — a play-panel click can trigger a
+   ready check, which can trigger room provisioning and a draft launch, which
+   posts a match-result card. Splitting this into fully independent
+   queue/lobby/draft-launch features (each with its own narrower interface)
+   is real future work, not completed by this refactor. Treat `PartyLobbyDeps`
+   as the accurate map of that coupling, not a finished decomposition.
+
+Every extraction in this refactor was done by writing characterization tests
+against the *current* behavior before moving code, then verifying the full
+suite still passes after. That is real regression protection for the test
+paths covered, but it is not equivalent to running the bot live — this
+environment has no way to join a Discord server and click through the actual
+UI. Treat this refactor as verified-by-test, not verified-live, until someone
+runs it against a real bot.
 
 ## Per-phase execution checklist
 
