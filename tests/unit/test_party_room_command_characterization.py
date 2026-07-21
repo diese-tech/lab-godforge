@@ -30,6 +30,9 @@ def room_service(monkeypatch):
     ):
         method.return_value = MagicMock(lobby_id="lobby-12345678")
     monkeypatch.setattr(bot, "_match_room_service_for_guild", lambda guild: service)
+    monkeypatch.setattr(
+        bot._party_room_deps, "match_room_service_for_guild", lambda guild: service
+    )
     return service
 
 

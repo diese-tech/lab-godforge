@@ -85,6 +85,7 @@ from utils.match_actions import (
     handle_match_continuity_action,
     handle_match_result_action,
 )
+from utils.party_room_command import PartyRoomCommandDeps, register_party_room_command
 from utils.schedule_commands import ScheduleCommandDeps, register_schedule_commands
 from utils.scrim_commands import ScrimCommandDeps, register_scrim_commands
 from utils.session_commands import SessionCommandHandler
@@ -1783,98 +1784,14 @@ async def party_setup(
     )
 
 
-@party_commands.command(
-    name="room",
-    description="Use organizer controls for a ready lobby's temporary rooms",
+# /party room is owned by the party-room-command feature module (Issue #48);
+# bot.py wires it with injected dependencies.
+_party_room_deps = PartyRoomCommandDeps(
+    party_repository=party_repository,
+    match_room_service_for_guild=_match_room_service_for_guild,
 )
-@app_commands.describe(
-    lobby_id="Stable lobby ID shown on the lobby card",
-    action="lock, unlock, remove, transfer, move, or close",
-    member="Player used by remove, transfer, or move",
-    lobby_voice="Configured source voice room for move",
-    team="Destination team number for move",
-)
-async def party_room(
-    interaction: discord.Interaction,
-    lobby_id: str,
-    action: str,
-    member: discord.Member | None = None,
-    lobby_voice: discord.VoiceChannel | None = None,
-    team: int | None = None,
-):
-    if interaction.guild is None:
-        await interaction.response.send_message("Server-only action.", ephemeral=True)
-        return
-    service = _match_room_service_for_guild(interaction.guild)
-    actor_id = interaction.user.id
-    action = action.strip().lower()
-    try:
-        if action == "lock":
-            rooms = await service.lock(lobby_id, actor_id=actor_id)
-        elif action == "unlock":
-            rooms = await service.unlock(lobby_id, actor_id=actor_id)
-        elif action == "remove" and member is not None:
-            rooms = await service.remove_player(
-                lobby_id, actor_id=actor_id, user_id=member.id
-            )
-        elif action == "transfer" and member is not None:
-            rooms = await service.transfer_transactionally(
-                lobby_id,
-                actor_id=actor_id,
-                new_organizer_id=member.id,
-                commit=lambda: party_repository.transfer_organizer(
-                    interaction.guild.id,
-                    lobby_id,
-                    member.id,
-                    operation_id=f"discord:{interaction.id}:room-transfer",
-                    actor_id=actor_id,
-                ),
-                compensate=lambda: party_repository.transfer_organizer(
-                    interaction.guild.id,
-                    lobby_id,
-                    actor_id,
-                    operation_id=(
-                        f"discord:{interaction.id}:room-transfer-compensation"
-                    ),
-                    actor_id=member.id,
-                ),
-            )
-        elif (
-            action == "move"
-            and member is not None
-            and lobby_voice is not None
-            and team is not None
-        ):
-            failures = await service.move_players(
-                lobby_id,
-                actor_id=actor_id,
-                lobby_voice_id=lobby_voice.id,
-                team_assignments={member.id: team},
-            )
-            if failures:
-                await interaction.response.send_message(
-                    failures[member.id], ephemeral=True
-                )
-                return
-            rooms = await service.get(lobby_id)
-        elif action == "close":
-            rooms = await service.close(
-                lobby_id, actor_id=actor_id, reason="organizer closed rooms"
-            )
-        else:
-            await interaction.response.send_message(
-                "Use lock, unlock, remove, transfer, move, or close. "
-                "Player/team inputs are required for their matching actions.",
-                ephemeral=True,
-            )
-            return
-    except (LookupError, PermissionError, ValueError, RuntimeError) as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message(
-        f"Room action `{action}` completed for `{rooms.lobby_id[:8]}`.",
-        ephemeral=True,
-    )
+register_party_room_command(party_commands, _party_room_deps)
+party_room = party_commands.room
 
 
 # Scheduled-night /party subcommands are owned by the schedule feature module
