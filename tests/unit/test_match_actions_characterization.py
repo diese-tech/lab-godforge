@@ -31,6 +31,10 @@ def match_repos(tmp_path, monkeypatch):
     monkeypatch.setattr(bot, "match_continuity_repository", continuity)
     monkeypatch.setattr(bot, "party_draft_repository", party_draft)
     monkeypatch.setattr(bot, "party_queue_service", queue_service)
+    monkeypatch.setattr(bot._match_action_deps, "match_history_repository", history)
+    monkeypatch.setattr(bot._match_action_deps, "match_continuity_repository", continuity)
+    monkeypatch.setattr(bot._match_action_deps, "party_draft_repository", party_draft)
+    monkeypatch.setattr(bot._match_action_deps, "party_queue_service", queue_service)
     return history, continuity, party_draft, queue_service
 
 
