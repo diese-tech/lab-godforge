@@ -45,6 +45,11 @@ async def test_failed_room_provisioning_keeps_ready_check_retryable(
     monkeypatch.setattr(
         bot, "_match_room_service_for_guild", lambda guild: room_service
     )
+    monkeypatch.setattr(bot._party_lobby_deps, "party_repository", repository)
+    monkeypatch.setattr(bot._party_lobby_deps, "party_queue_service", queue_service)
+    monkeypatch.setattr(
+        bot._party_lobby_deps, "match_room_service_for_guild", lambda guild: room_service
+    )
 
     response = SimpleNamespace(edit_message=AsyncMock())
     interaction = SimpleNamespace(

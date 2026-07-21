@@ -199,6 +199,13 @@ Without a count, build commands return 6 items. Counts outside 1-5 are ignored b
 | Command | Result |
 | --- | --- |
 | `.help` | Show bot command pages |
+| `.r67` | Post one random GodForge brainrot response |
+| `.r67 status` | Show whether passive 67 reactions are enabled |
+| `.r67 reactions on\|off` | (Manage Server) Toggle opt-in passive 67 reactions |
+
+Passive 67 reactions are disabled by default and opt-in per guild. See
+[`docs/R67_BRAINROT.md`](docs/R67_BRAINROT.md) for behavior and the modular
+feature layout it establishes.
 
 Party setup and temporary-room controls use Discord slash commands:
 
