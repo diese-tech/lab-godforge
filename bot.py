@@ -80,6 +80,7 @@ from utils.draft_coordinator import DraftCoordinator
 from utils.draft_render import DraftRenderer
 from utils import match_results
 from utils.match_room_factory import MatchRoomServiceFactory
+from utils.scrim_commands import ScrimCommandDeps, register_scrim_commands
 from utils.session_commands import SessionCommandHandler
 from utils.lifecycle import FeatureRegistry, LifecycleContext
 from utils.routing import CommandRegistry
@@ -1611,288 +1612,26 @@ async def _ensure_room_category(
     ).id
 
 
-def _scrim_challenge_id(interaction: discord.Interaction) -> str | None:
-    if not interaction.message or not interaction.message.embeds:
-        return None
-    footer = interaction.message.embeds[0].footer.text or ""
-    return footer.removeprefix("Scrim challenge ").strip() or None
-
-
-class ScrimChallengeView(discord.ui.View):
-    """Restart-safe challenge controls; the durable ID lives in the embed."""
-
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    async def _respond(self, interaction: discord.Interaction, response: str):
-        challenge_id = _scrim_challenge_id(interaction)
-        if not challenge_id:
-            await interaction.response.send_message(
-                "This challenge card is missing its durable ID.", ephemeral=True
-            )
-            return
-        try:
-            existing = scrim_repository.get_challenge(challenge_id)
-            if existing is None or existing.guild_id != interaction.guild_id:
-                raise ScrimError("challenge not found in this server")
-            challenge = scrim_repository.respond(
-                challenge_id, actor_id=interaction.user.id, response=response,
-                operation_id=f"discord:{interaction.id}:scrim-{response}",
-            )
-        except ScrimError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        await interaction.response.send_message(
-            f"Challenge `{challenge.challenge_id}` is now **{challenge.state.value}**."
-        )
-
-    @discord.ui.button(
-        label="Accept", style=discord.ButtonStyle.success,
-        custom_id="godforge:scrim:accept",
-    )
-    async def accept(self, interaction: discord.Interaction, _button):
-        await self._respond(interaction, "accept")
-
-    @discord.ui.button(
-        label="Reject", style=discord.ButtonStyle.danger,
-        custom_id="godforge:scrim:reject",
-    )
-    async def reject(self, interaction: discord.Interaction, _button):
-        await self._respond(interaction, "reject")
-
-    @discord.ui.button(
-        label="Check in", style=discord.ButtonStyle.primary,
-        custom_id="godforge:scrim:checkin",
-    )
-    async def checkin(self, interaction: discord.Interaction, _button):
-        challenge_id = _scrim_challenge_id(interaction)
-        if not challenge_id:
-            await interaction.response.send_message("Challenge ID missing.", ephemeral=True)
-            return
-        try:
-            existing = scrim_repository.get_challenge(challenge_id)
-            if existing is None or existing.guild_id != interaction.guild_id:
-                raise ScrimError("challenge not found in this server")
-            challenge = scrim_repository.check_in(
-                challenge_id, actor_id=interaction.user.id,
-                operation_id=f"discord:{interaction.id}:scrim-checkin",
-            )
-        except ScrimError as exc:
-            await interaction.response.send_message(str(exc), ephemeral=True)
-            return
-        await interaction.response.send_message(
-            f"Check-in recorded ({len(challenge.checked_in_team_ids)}/2 captains)."
-        )
-
-
-def _discord_ids(value: str) -> tuple[int, ...]:
-    ids = tuple(
-        dict.fromkeys(
-            int(match)
-            for match in re.findall(r"\d{5,25}", value)
-        )
-    )
-    if not ids:
-        raise ScrimError("mention at least one Discord member")
-    return ids
-
-
-scrim_commands = app_commands.Group(
-    name="scrim",
-    description="Manage guild teams and captain challenges",
+# The /scrim command family and ScrimChallengeView are owned by the scrim
+# feature module (Issue #48); bot.py wires it with injected dependencies.
+_scrim_deps = ScrimCommandDeps(
+    scrim_repository=scrim_repository,
+    schedule_repository=schedule_repository,
+    party_repository=party_repository,
+    party_queue_service=party_queue_service,
+    ready_check_embed=lambda lobby_id, queue: _ready_check_embed(lobby_id, queue),
+    ready_check_view=lambda: ReadyCheckView(_handle_ready_check_action),
+    lobby_card_embed=lambda lobby: _lobby_card_embed(lobby),
+    lobby_card_view=lambda: LobbyCardView(_handle_lobby_card_action),
 )
-client.tree.add_command(scrim_commands)
-
-
-@scrim_commands.command(name="team-create", description="Create or update your scrim team")
-async def scrim_team_create(
-    interaction: discord.Interaction, name: str, roster: str,
-    region: str, availability: str, substitutes: str = "",
-):
-    if interaction.guild_id is None:
-        await interaction.response.send_message("Server-only command.", ephemeral=True)
-        return
-    try:
-        active = tuple(dict.fromkeys((interaction.user.id,) + _discord_ids(roster)))
-        bench = _discord_ids(substitutes) if substitutes.strip() else ()
-        team = scrim_repository.save_team(
-            guild_id=interaction.guild_id, captain_id=interaction.user.id,
-            name=name, roster=active, substitutes=bench, region=region,
-            availability=availability,
-            operation_id=f"discord:{interaction.id}:scrim-team",
-            manager_override=bool(interaction.user.guild_permissions.manage_guild),
-        )
-    except ScrimError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message(
-        f"Saved **{team.name}** (`{team.team_id}`): {len(team.roster)} active, "
-        f"{len(team.substitutes)} substitutes, {team.region}.",
-        ephemeral=True,
-    )
-
-
-@scrim_commands.command(name="teams", description="List registered teams in this server")
-async def scrim_teams(interaction: discord.Interaction):
-    teams = scrim_repository.list_teams(interaction.guild_id or 0)
-    await interaction.response.send_message(
-        "\n".join(
-            f"`{team.team_id}` **{team.name}** — {team.region}; "
-            f"{len(team.roster)} active; {team.availability}"
-            for team in teams
-        ) or "No scrim teams are registered.",
-        ephemeral=True,
-    )
-
-
-@scrim_commands.command(name="challenge", description="Challenge another registered team")
-async def scrim_challenge(
-    interaction: discord.Interaction, your_team_id: str, opponent_team_id: str,
-    when: str, timezone_name: str,
-):
-    if interaction.guild_id is None:
-        await interaction.response.send_message("Server-only command.", ephemeral=True)
-        return
-    try:
-        your_team = scrim_repository.get_team(your_team_id)
-        opponent = scrim_repository.get_team(opponent_team_id)
-        if (
-            your_team is None or opponent is None
-            or your_team.guild_id != interaction.guild_id
-            or opponent.guild_id != interaction.guild_id
-        ):
-            raise ScrimError("both teams must be registered in this server")
-        challenge = scrim_repository.challenge(
-            challenger_team_id=your_team_id, recipient_team_id=opponent_team_id,
-            actor_id=interaction.user.id,
-            starts_at=parse_local_start(when, timezone_name),
-            timezone_name=timezone_name,
-            operation_id=f"discord:{interaction.id}:scrim-challenge",
-        )
-    except (ScrimError, ScheduleError) as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    embed = discord.Embed(
-        title="Scrim challenge",
-        description=(
-            f"<@{opponent.captain_id}>, your team has been challenged for "
-            f"<t:{int(challenge.starts_at.timestamp())}:F>.\n"
-            "Accept or reject below, or use `/scrim respond` to propose another time."
-        ),
-        color=discord.Color.blurple(),
-    )
-    embed.set_footer(text=f"Scrim challenge {challenge.challenge_id}")
-    await interaction.response.send_message(
-        content=f"<@{opponent.captain_id}>", embed=embed,
-        view=ScrimChallengeView(),
-        allowed_mentions=discord.AllowedMentions(users=True, roles=False),
-    )
-
-
-@scrim_commands.command(name="respond", description="Accept, reject, or counter a challenge")
-async def scrim_respond(
-    interaction: discord.Interaction, challenge_id: str, response: str,
-    proposed_when: str = "", timezone_name: str = "UTC",
-):
-    try:
-        existing = scrim_repository.get_challenge(challenge_id)
-        if existing is None or existing.guild_id != interaction.guild_id:
-            raise ScrimError("challenge not found in this server")
-        proposed = (
-            parse_local_start(proposed_when, timezone_name)
-            if response.strip().lower() == "propose" else None
-        )
-        challenge = scrim_repository.respond(
-            challenge_id, actor_id=interaction.user.id, response=response,
-            proposed_at=proposed,
-            operation_id=f"discord:{interaction.id}:scrim-respond",
-        )
-    except (ScrimError, ScheduleError) as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message(
-        f"Challenge `{challenge.challenge_id}` is **{challenge.state.value}** at "
-        f"<t:{int(challenge.starts_at.timestamp())}:F>."
-    )
-
-
-@scrim_commands.command(name="checkin", description="Check your team into an accepted scrim")
-async def scrim_checkin(interaction: discord.Interaction, challenge_id: str):
-    try:
-        existing = scrim_repository.get_challenge(challenge_id)
-        if existing is None or existing.guild_id != interaction.guild_id:
-            raise ScrimError("challenge not found in this server")
-        challenge = scrim_repository.check_in(
-            challenge_id, actor_id=interaction.user.id,
-            operation_id=f"discord:{interaction.id}:scrim-checkin",
-        )
-    except ScrimError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message(
-        f"Check-in recorded ({len(challenge.checked_in_team_ids)}/2 captains)."
-    )
-
-
-@scrim_commands.command(name="lock", description="Lock both checked-in rosters")
-async def scrim_lock(interaction: discord.Interaction, challenge_id: str):
-    try:
-        existing = scrim_repository.get_challenge(challenge_id)
-        if existing is None or existing.guild_id != interaction.guild_id:
-            raise ScrimError("challenge not found in this server")
-        challenge = scrim_repository.lock_rosters(
-            challenge_id, actor_id=interaction.user.id,
-            organizer_override=bool(
-                interaction.guild
-                and interaction.user.guild_permissions.manage_guild
-            ),
-            operation_id=f"discord:{interaction.id}:scrim-lock",
-        )
-    except ScrimError as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    await interaction.response.send_message(
-        f"Rosters locked for `{challenge.challenge_id}`. "
-        "Edits to registered teams will not change this match."
-    )
-
-
-@scrim_commands.command(name="launch", description="Launch a locked scrim as a GodForge lobby")
-async def scrim_launch(interaction: discord.Interaction, challenge_id: str):
-    challenge = scrim_repository.get_challenge(challenge_id)
-    if challenge is None or challenge.guild_id != interaction.guild_id:
-        await interaction.response.send_message("Challenge not found.", ephemeral=True)
-        return
-    if (
-        interaction.user.id != challenge.organizer_id
-        and not interaction.user.guild_permissions.manage_guild
-    ):
-        await interaction.response.send_message(
-            "Only the organizer or a server manager can launch.", ephemeral=True
-        )
-        return
-    try:
-        lobby = await launch_scrim(
-            challenge, scrim_repository, schedule_repository, party_repository,
-            party_queue_service, operation_id=f"discord:{interaction.id}:scrim-launch",
-        )
-    except (ScrimError, ScheduleError, QueueError, ValueError) as exc:
-        await interaction.response.send_message(str(exc), ephemeral=True)
-        return
-    queue = await party_queue_service.get(lobby.lobby_id)
-    if lobby.state is LobbyState.READY_CHECK and queue is not None:
-        await interaction.response.send_message(
-            content=" ".join(f"<@{member.user_id}>" for member in queue.active),
-            embed=_ready_check_embed(lobby.lobby_id, queue),
-            view=ReadyCheckView(_handle_ready_check_action),
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False),
-        )
-    else:
-        await interaction.response.send_message(
-            content=f"Scrim `{challenge.challenge_id}` is now a GodForge lobby.",
-            embed=_lobby_card_embed(lobby), view=LobbyCardView(_handle_lobby_card_action),
-        )
-
+scrim_commands, ScrimChallengeView = register_scrim_commands(client.tree, _scrim_deps)
+scrim_team_create = scrim_commands.team_create
+scrim_teams = scrim_commands.teams
+scrim_challenge = scrim_commands.challenge
+scrim_respond = scrim_commands.respond
+scrim_checkin = scrim_commands.checkin
+scrim_lock = scrim_commands.lock
+scrim_launch = scrim_commands.launch
 
 party_commands = app_commands.Group(
     name="party",
@@ -2182,7 +1921,7 @@ async def party_schedule(
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
     await interaction.response.send_message(
-        f"Confirm **{event.title}** at <t:{int(event.starts_at.timestamp())}:F> "
+        f"Confirm **{event.title}** at <t:{int(event.starts_at.timestamp())}:D> "
         f"(<t:{int(event.starts_at.timestamp())}:R>), interpreted in "
         f"`{event.timezone_name}`. Run `/party confirm {event.event_id}` to publish it.",
         ephemeral=True,
@@ -2197,7 +1936,8 @@ async def party_confirm(interaction: discord.Interaction, event_id: str):
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
     await interaction.response.send_message(
-        f"Scheduled **{event.title}** for <t:{int(event.starts_at.timestamp())}:F>. "
+        f"Scheduled **{event.title}** for <t:{int(event.starts_at.timestamp())}:D> "
+        f"(<t:{int(event.starts_at.timestamp())}:R>). "
         f"RSVP with `/party rsvp {event.event_id}`."
     )
 
@@ -2257,7 +1997,8 @@ async def party_events(interaction: discord.Interaction):
     await interaction.response.send_message(
         "\n".join(
             f"`{event.event_id}` **{event.title}** — "
-            f"<t:{int(event.starts_at.timestamp())}:F> — "
+            f"<t:{int(event.starts_at.timestamp())}:D> "
+            f"(<t:{int(event.starts_at.timestamp())}:R>) — "
             f"{len(event.rsvps)}/{event.capacity} RSVP"
             for event in events
         ),

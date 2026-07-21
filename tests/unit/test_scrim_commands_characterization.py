@@ -24,6 +24,7 @@ WHEN = FUTURE.strftime("%Y-%m-%d %H:%M")
 def scrim_repo(tmp_path, monkeypatch):
     repo = ScrimRepository(tmp_path / "party.db")
     monkeypatch.setattr(bot, "scrim_repository", repo)
+    monkeypatch.setattr(bot._scrim_deps, "scrim_repository", repo)
     return repo
 
 
