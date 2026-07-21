@@ -114,18 +114,19 @@ Ready-check expiry and room reconciliation become lifecycle hooks.
   coordinated via an injected `MatchActionDeps`.
 - **Depends on:** Phase 5. **Risk:** medium.
 
-### Phase 7 — Scrims & scheduled nights features (PARTIAL)
+### Phase 7 — Scrims & scheduled nights features (DONE)
 
-Move scrim challenge/lock/launch and scheduled-night handlers plus their reminder
-cleanup behind feature modules with lifecycle hooks.
-
-- **7a (DONE)** — `utils/scrim_commands.py` owns the full `/scrim` command group
-  and `ScrimChallengeView`, built behind characterization tests
+- **7a** — `utils/scrim_commands.py` owns the full `/scrim` command group and
+  `ScrimChallengeView`, built behind characterization tests
   (`tests/unit/test_scrim_commands_characterization.py`).
-- **Remaining:** the `/party schedule`/`confirm`/`rsvp`/`unrsvp`/`events`/
-  `calendar`/`open-scheduled` scheduled-night commands and their reminder
-  cleanup (still inline in `bot.py`; scheduling domain logic already lives in
-  `utils/party_schedule.py`).
+- **7b** — `utils/schedule_commands.py` owns the scheduled-night `/party`
+  subcommands (schedule, confirm, rsvp, unrsvp, events, calendar,
+  open-scheduled), registered onto the existing `/party` group, built behind
+  characterization tests
+  (`tests/unit/test_party_schedule_commands_characterization.py`).
+- **Remaining polish:** the reminder-delivery loop in the periodic cleanup task
+  (DM reminders for RSVP'd users) is still inline in `bot.py`'s cleanup task; it
+  could become a schedule-feature lifecycle hook in a future pass.
 - **Depends on:** Phases 5–6. **Risk:** medium.
 
 ### Phase 8 — Shared infrastructure hardening & bot.py reduction
