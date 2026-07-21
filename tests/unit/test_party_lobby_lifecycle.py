@@ -27,6 +27,7 @@ def _service(*, party_repository=None, party_queue_service=None, settings_module
         save_active_draft=lambda cid, did: None,
         ensure_match_history=lambda lobby, launch: None,
         match_result_embed=lambda record: MagicMock(),
+        set_member_role=AsyncMock(),
         log=MagicMock(),
         lobby_card_view=lambda: MagicMock(),
         ready_check_view=lambda: MagicMock(),

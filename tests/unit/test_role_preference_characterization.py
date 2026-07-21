@@ -41,7 +41,9 @@ def stub_settings_and_role(monkeypatch, tmp_settings):
     settings_mod.update_guild_settings(
         "1", {"managed": {"roleIds": {"solo": "9999"}}}
     )
-    monkeypatch.setattr(bot, "set_member_role", AsyncMock())
+    stub = AsyncMock()
+    monkeypatch.setattr(bot, "set_member_role", stub)
+    monkeypatch.setattr(bot._party_lobby_deps, "set_member_role", stub)
     yield
 
 

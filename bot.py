@@ -1609,6 +1609,7 @@ _party_lobby_deps = PartyLobbyDeps(
     save_active_draft=_save_active_draft,
     ensure_match_history=_ensure_match_history,
     match_result_embed=_match_result_embed,
+    set_member_role=set_member_role,
     log=log,
     lobby_card_view=lambda: LobbyCardView(_handle_lobby_card_action),
     ready_check_view=lambda: ReadyCheckView(_handle_ready_check_action),
@@ -1632,47 +1633,8 @@ async def _handle_ready_check_action(interaction: discord.Interaction, action: s
     await party_lobby_service.handle_ready_check_action(interaction, action)
 
 
-async def _handle_role_preference(
-    interaction: discord.Interaction,
-    role_key: str,
-) -> None:
-    if interaction.guild is None or not isinstance(interaction.user, discord.Member):
-        await interaction.response.send_message("Server-only action.", ephemeral=True)
-        return
-    guild_id = interaction.guild.id
-    managed = settings.get_guild_settings(str(guild_id))["managed"]
-    stored_role_ids = managed["roleIds"]
-    role_id = int(stored_role_ids.get(role_key) or 0)
-    enabled = role_id not in {role.id for role in interaction.user.roles}
-    await set_member_role(
-        interaction.guild,
-        interaction.user,
-        role_key,
-        enabled,
-        stored_role_ids,
-    )
-    profile = party_repository.get_player_preferences(guild_id, interaction.user.id)
-    roles = list(profile.roles)
-    if role_key in {"solo", "jungle", "mid", "support", "adc"}:
-        if enabled and role_key not in roles:
-            roles.append(role_key)
-        if not enabled and role_key in roles:
-            roles.remove(role_key)
-    saved = party_repository.set_player_preferences(
-        guild_id,
-        interaction.user.id,
-        PlayerPreferences(
-            roles[0] if roles else None,
-            roles[1] if len(roles) > 1 else None,
-            profile.fill,
-            enabled if role_key == "captain" else profile.captain,
-        ),
-    )
-    await interaction.response.send_message(
-        f"{role_key.title()} {'added' if enabled else 'removed'}. "
-        f"Preferences: {', '.join(saved.roles) or 'none'}.",
-        ephemeral=True,
-    )
+async def _handle_role_preference(interaction: discord.Interaction, role_key: str) -> None:
+    await party_lobby_service.handle_role_preference(interaction, role_key)
 
 
 def main():
