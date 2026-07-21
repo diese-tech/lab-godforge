@@ -78,6 +78,7 @@ from utils.active_drafts import ActiveDraftStore
 from utils.custom_command_runtime import CustomCommandRuntime
 from utils.draft_coordinator import DraftCoordinator, DraftFeature
 from utils.room_lifecycle import RoomLifecycle
+from utils.schedule_lifecycle import ScheduleLifecycle
 from utils.draft_render import DraftRenderer
 from utils import match_results
 from utils.match_room_factory import MatchRoomServiceFactory
@@ -187,6 +188,7 @@ forgelens_adapter = ForgeLensAdapter()
 # cleanup and register it here; bot.py only orchestrates the shared phases.
 feature_registry = FeatureRegistry()
 feature_registry.register(R67Feature(r67_service))
+feature_registry.register(ScheduleLifecycle(schedule_repository))
 
 
 def _lifecycle_context() -> LifecycleContext:
@@ -311,19 +313,6 @@ async def cleanup_task():
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
 
     await feature_registry.run_cleanup(_lifecycle_context())
-
-    for event, minutes, occurrence in schedule_repository.claim_due_reminders():
-        recipients = {event.organizer_id, *(rsvp.user_id for rsvp in event.rsvps)}
-        recipients.update(rsvp.user_id for rsvp in event.waitlist)
-        for user_id in recipients:
-            try:
-                user = client.get_user(user_id) or await client.fetch_user(user_id)
-                await user.send(
-                    f"**{event.title}** starts <t:{int(occurrence.timestamp())}:R> "
-                    f"({minutes}-minute reminder)."
-                )
-            except (discord.Forbidden, discord.HTTPException):
-                log.info("Could not DM scheduled-night reminder to user %s", user_id)
 
     for record in party_repository.recover_active():
         lobby = record.lobby
