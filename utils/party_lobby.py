@@ -30,6 +30,7 @@ from typing import Callable
 
 import discord
 
+from utils.lifecycle import LifecycleContext
 from utils.party import LobbyState, Participant, PlayerPreferences
 from utils.party_draft import PartyDraftError
 from utils.party_queue import QueueError, QueueStatus, ReadyStatus
@@ -870,3 +871,49 @@ class PartyLobbyService:
                 f"<@{promoted_id}> was promoted from the waitlist.",
                 allowed_mentions=discord.AllowedMentions(users=True, roles=False),
             )
+
+    # -- Ready-check expiry (periodic cleanup) -------------------------------
+
+    async def expire_ready_checks(self, ctx: LifecycleContext) -> None:
+        """Time out ready checks whose deadline has passed.
+
+        A timed-out queue that has been cancelled also cancels its lobby; the
+        organizer's play channel (if configured) is notified either way.
+        """
+        deps = self.deps
+        for record in deps.party_repository.recover_active():
+            lobby = record.lobby
+            if lobby.state is not LobbyState.READY_CHECK:
+                continue
+            queue, timed_out = await deps.party_queue_service.expire(lobby.lobby_id)
+            if not timed_out:
+                continue
+            if queue.status is QueueStatus.CANCELLED:
+                deps.party_repository.transition(
+                    lobby.guild_id,
+                    lobby.lobby_id,
+                    LobbyState.CANCELLED,
+                    operation_id=f"ready-timeout:{lobby.lobby_id}:{queue.ready_deadline}",
+                    reason="ready check timed out",
+                )
+            guild_settings = deps.settings_module.get_guild_settings(str(lobby.guild_id))
+            channel_id = guild_settings["managed"].get("playChannelId")
+            channel = ctx.get_channel(int(channel_id)) if channel_id else None
+            if channel:
+                await channel.send(
+                    "Ready check timed out for "
+                    + " ".join(f"<@{user_id}>" for user_id in timed_out),
+                    allowed_mentions=discord.AllowedMentions(users=True, roles=False),
+                )
+
+
+class PartyLobbyFeature:
+    """Registers ready-check-expiry cleanup with the shared registry."""
+
+    name = "party_lobby"
+
+    def __init__(self, service: PartyLobbyService) -> None:
+        self.service = service
+
+    async def on_cleanup(self, ctx: LifecycleContext) -> None:
+        await self.service.expire_ready_checks(ctx)

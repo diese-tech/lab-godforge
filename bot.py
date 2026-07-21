@@ -87,7 +87,7 @@ from utils.match_actions import (
     handle_match_continuity_action,
     handle_match_result_action,
 )
-from utils.party_lobby import PartyLobbyDeps, PartyLobbyService
+from utils.party_lobby import PartyLobbyDeps, PartyLobbyFeature, PartyLobbyService
 from utils.party_room_command import PartyRoomCommandDeps, register_party_room_command
 from utils.party_setup_command import PartySetupCommandDeps, register_party_setup_command
 from utils.schedule_commands import ScheduleCommandDeps, register_schedule_commands
@@ -313,31 +313,6 @@ async def cleanup_task():
         log.info(f"Cleaned up {len(expired_drafts)} expired local draft(s)")
 
     await feature_registry.run_cleanup(_lifecycle_context())
-
-    for record in party_repository.recover_active():
-        lobby = record.lobby
-        if lobby.state is not LobbyState.READY_CHECK:
-            continue
-        queue, timed_out = await party_queue_service.expire(lobby.lobby_id)
-        if not timed_out:
-            continue
-        if queue.status is QueueStatus.CANCELLED:
-            party_repository.transition(
-                lobby.guild_id,
-                lobby.lobby_id,
-                LobbyState.CANCELLED,
-                operation_id=f"ready-timeout:{lobby.lobby_id}:{queue.ready_deadline}",
-                reason="ready check timed out",
-            )
-        guild_settings = settings.get_guild_settings(str(lobby.guild_id))
-        channel_id = guild_settings["managed"].get("playChannelId")
-        channel = client.get_channel(int(channel_id)) if channel_id else None
-        if channel:
-            await channel.send(
-                "Ready check timed out for "
-                + " ".join(f"<@{user_id}>" for user_id in timed_out),
-                allowed_mentions=discord.AllowedMentions(users=True, roles=False),
-            )
 
 
 @cleanup_task.error
@@ -1643,6 +1618,7 @@ _party_lobby_deps = PartyLobbyDeps(
     match_result_view=lambda: MatchResultView(_handle_match_result_action),
 )
 party_lobby_service = PartyLobbyService(_party_lobby_deps)
+feature_registry.register(PartyLobbyFeature(party_lobby_service))
 
 def _reconcile_active_party_draft(lobby, launch, actor_id: int) -> None:
     party_lobby_service.reconcile_active_party_draft(lobby, launch, actor_id)
